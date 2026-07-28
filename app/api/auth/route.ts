@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 
 const SUPABASE_URL = 'https://ensijapqbeyhkvtountf.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_u-a0I1UzP4GALLfSsH3ZuQ_faUSMbs5';
+const SITE_URL = 'https://trevility.vercel.app';
+const CONFIRM_REDIRECT = `${SITE_URL}/confirmed`;
 const ACCESS_COOKIE = 'trevecta_access_token';
 const REFRESH_COOKIE = 'trevecta_refresh_token';
 
@@ -49,7 +51,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const action = body.action as 'login' | 'signup' | 'logout';
+  const action = body.action as 'login' | 'signup' | 'resend' | 'logout';
 
   if (action === 'logout') {
     const output = NextResponse.json({ ok: true });
@@ -58,11 +60,38 @@ export async function POST(request: Request) {
     return output;
   }
 
-  if (!body.email || !body.password) {
-    return NextResponse.json({ error: 'Email and password are required.' }, { status: 400 });
+  if (!body.email) {
+    return NextResponse.json({ error: 'Email is required.' }, { status: 400 });
   }
 
-  const path = action === 'signup' ? '/auth/v1/signup' : '/auth/v1/token?grant_type=password';
+  if (action === 'resend') {
+    const response = await supabaseFetch(
+      `/auth/v1/resend?redirect_to=${encodeURIComponent(CONFIRM_REDIRECT)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ type: 'signup', email: body.email }),
+      },
+    );
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: data.msg ?? data.error_description ?? data.message ?? 'Unable to resend confirmation email.' },
+        { status: response.status },
+      );
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
+  if (!body.password) {
+    return NextResponse.json({ error: 'Password is required.' }, { status: 400 });
+  }
+
+  const path = action === 'signup'
+    ? `/auth/v1/signup?redirect_to=${encodeURIComponent(CONFIRM_REDIRECT)}`
+    : '/auth/v1/token?grant_type=password';
+
   const response = await supabaseFetch(path, {
     method: 'POST',
     body: JSON.stringify({ email: body.email, password: body.password }),
