@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 type Organisation = {
   organisation_id: string;
   role: 'owner' | 'admin' | 'member' | 'viewer';
-  organisations: { id: string; name: string; slug: string } | null;
+  organisations: Array<{ id: string; name: string; slug: string }>;
 };
 
 export default function HomePage() {
@@ -247,12 +247,15 @@ export default function HomePage() {
             <p>No organisation exists yet. Create the first one to become its owner.</p>
           ) : (
             <div className="organisation-list">
-              {memberships.map((membership) => (
-                <div className="organisation-row" key={membership.organisation_id}>
-                  <strong>{membership.organisations?.name ?? 'Organisation'}</strong>
-                  <div className="small">/{membership.organisations?.slug} · {membership.role}</div>
-                </div>
-              ))}
+              {memberships.map((membership) => {
+                const organisation = membership.organisations[0];
+                return (
+                  <div className="organisation-row" key={membership.organisation_id}>
+                    <strong>{organisation?.name ?? 'Organisation'}</strong>
+                    <div className="small">/{organisation?.slug ?? 'unknown'} · {membership.role}</div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
