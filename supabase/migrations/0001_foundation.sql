@@ -1,7 +1,8 @@
 -- Trevecta MVP foundation
--- Multi-tenant organisation boundary, profiles, imports, exceptions and actions.
+-- Secure multi-tenant organisation boundary, profiles, imports, exceptions and actions.
 
 create extension if not exists pgcrypto;
+create schema if not exists private;
 
 create type public.organisation_role as enum ('owner', 'admin', 'member', 'viewer');
 create type public.import_status as enum ('uploaded', 'validating', 'ready', 'failed', 'completed');
@@ -32,7 +33,6 @@ create table public.organisation_members (
   created_at timestamptz not null default now(),
   primary key (organisation_id, user_id)
 );
-
 create index organisation_members_user_idx on public.organisation_members(user_id, organisation_id);
 
 create table public.imports (
@@ -50,7 +50,6 @@ create table public.imports (
   created_at timestamptz not null default now(),
   completed_at timestamptz
 );
-
 create index imports_org_created_idx on public.imports(organisation_id, created_at desc);
 
 create table public.exceptions (
@@ -73,7 +72,6 @@ create table public.exceptions (
   updated_at timestamptz not null default now(),
   resolved_at timestamptz
 );
-
 create index exceptions_org_status_idx on public.exceptions(organisation_id, status, severity);
 
 create table public.actions (
@@ -90,34 +88,33 @@ create table public.actions (
   updated_at timestamptz not null default now(),
   completed_at timestamptz
 );
-
 create index actions_org_status_idx on public.actions(organisation_id, status, due_date);
 
-create or replace function public.is_organisation_member(target_organisation_id uuid)
+-- These helpers live outside the exposed schema. They are narrowly scoped,
+-- verify the current authenticated user, and avoid recursive RLS evaluation.
+create or replace function private.is_organisation_member(target_organisation_id uuid)
 returns boolean
 language sql
 stable
-security invoker
-set search_path = public
+security definer
+set search_path = ''
 as $$
-  select exists (
-    select 1
-    from public.organisation_members m
+  select (select auth.uid()) is not null and exists (
+    select 1 from public.organisation_members m
     where m.organisation_id = target_organisation_id
       and m.user_id = (select auth.uid())
   );
 $$;
 
-create or replace function public.has_organisation_role(target_organisation_id uuid, allowed_roles public.organisation_role[])
+create or replace function private.has_organisation_role(target_organisation_id uuid, allowed_roles public.organisation_role[])
 returns boolean
 language sql
 stable
-security invoker
-set search_path = public
+security definer
+set search_path = ''
 as $$
-  select exists (
-    select 1
-    from public.organisation_members m
+  select (select auth.uid()) is not null and exists (
+    select 1 from public.organisation_members m
     where m.organisation_id = target_organisation_id
       and m.user_id = (select auth.uid())
       and m.role = any(allowed_roles)
@@ -127,8 +124,8 @@ $$;
 create or replace function public.create_organisation(organisation_name text, organisation_slug text)
 returns public.organisations
 language plpgsql
-security invoker
-set search_path = public
+security definer
+set search_path = ''
 as $$
 declare
   new_org public.organisations;
@@ -155,55 +152,43 @@ alter table public.imports enable row level security;
 alter table public.exceptions enable row level security;
 alter table public.actions enable row level security;
 
-create policy profiles_select_own on public.profiles for select to authenticated
-using ((select auth.uid()) = user_id);
-create policy profiles_insert_own on public.profiles for insert to authenticated
-with check ((select auth.uid()) = user_id);
-create policy profiles_update_own on public.profiles for update to authenticated
-using ((select auth.uid()) = user_id)
-with check ((select auth.uid()) = user_id);
+create policy profiles_select_own on public.profiles for select to authenticated using ((select auth.uid()) = user_id);
+create policy profiles_insert_own on public.profiles for insert to authenticated with check ((select auth.uid()) = user_id);
+create policy profiles_update_own on public.profiles for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 
-create policy organisations_select_member on public.organisations for select to authenticated
-using (public.is_organisation_member(id));
+create policy organisations_select_member on public.organisations for select to authenticated using ((select private.is_organisation_member(id)));
 create policy organisations_update_admin on public.organisations for update to authenticated
-using (public.has_organisation_role(id, array['owner','admin']::public.organisation_role[]))
-with check (public.has_organisation_role(id, array['owner','admin']::public.organisation_role[]));
+using ((select private.has_organisation_role(id, array['owner','admin']::public.organisation_role[])))
+with check ((select private.has_organisation_role(id, array['owner','admin']::public.organisation_role[])));
 
-create policy members_select_member on public.organisation_members for select to authenticated
-using (public.is_organisation_member(organisation_id));
-create policy members_insert_owner on public.organisation_members for insert to authenticated
-with check (public.has_organisation_role(organisation_id, array['owner']::public.organisation_role[]));
+create policy members_select_member on public.organisation_members for select to authenticated using ((select private.is_organisation_member(organisation_id)));
+create policy members_insert_owner on public.organisation_members for insert to authenticated with check ((select private.has_organisation_role(organisation_id, array['owner']::public.organisation_role[])));
 create policy members_update_owner on public.organisation_members for update to authenticated
-using (public.has_organisation_role(organisation_id, array['owner']::public.organisation_role[]))
-with check (public.has_organisation_role(organisation_id, array['owner']::public.organisation_role[]));
-create policy members_delete_owner on public.organisation_members for delete to authenticated
-using (public.has_organisation_role(organisation_id, array['owner']::public.organisation_role[]));
+using ((select private.has_organisation_role(organisation_id, array['owner']::public.organisation_role[])))
+with check ((select private.has_organisation_role(organisation_id, array['owner']::public.organisation_role[])));
+create policy members_delete_owner on public.organisation_members for delete to authenticated using ((select private.has_organisation_role(organisation_id, array['owner']::public.organisation_role[])));
 
-create policy imports_select_member on public.imports for select to authenticated
-using (public.is_organisation_member(organisation_id));
+create policy imports_select_member on public.imports for select to authenticated using ((select private.is_organisation_member(organisation_id)));
 create policy imports_insert_member on public.imports for insert to authenticated
-with check (public.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[]) and created_by = (select auth.uid()));
+with check ((select private.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[])) and created_by = (select auth.uid()));
 create policy imports_update_admin on public.imports for update to authenticated
-using (public.has_organisation_role(organisation_id, array['owner','admin']::public.organisation_role[]))
-with check (public.has_organisation_role(organisation_id, array['owner','admin']::public.organisation_role[]));
+using ((select private.has_organisation_role(organisation_id, array['owner','admin']::public.organisation_role[])))
+with check ((select private.has_organisation_role(organisation_id, array['owner','admin']::public.organisation_role[])));
 
-create policy exceptions_select_member on public.exceptions for select to authenticated
-using (public.is_organisation_member(organisation_id));
-create policy exceptions_insert_admin on public.exceptions for insert to authenticated
-with check (public.has_organisation_role(organisation_id, array['owner','admin']::public.organisation_role[]));
+create policy exceptions_select_member on public.exceptions for select to authenticated using ((select private.is_organisation_member(organisation_id)));
+create policy exceptions_insert_admin on public.exceptions for insert to authenticated with check ((select private.has_organisation_role(organisation_id, array['owner','admin']::public.organisation_role[])));
 create policy exceptions_update_member on public.exceptions for update to authenticated
-using (public.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[]))
-with check (public.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[]));
+using ((select private.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[])))
+with check ((select private.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[])));
 
-create policy actions_select_member on public.actions for select to authenticated
-using (public.is_organisation_member(organisation_id));
+create policy actions_select_member on public.actions for select to authenticated using ((select private.is_organisation_member(organisation_id)));
 create policy actions_insert_member on public.actions for insert to authenticated
-with check (public.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[]) and created_by = (select auth.uid()));
+with check ((select private.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[])) and created_by = (select auth.uid()));
 create policy actions_update_member on public.actions for update to authenticated
-using (public.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[]))
-with check (public.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[]));
+using ((select private.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[])))
+with check ((select private.has_organisation_role(organisation_id, array['owner','admin','member']::public.organisation_role[])));
 
-revoke all on function public.create_organisation(text, text) from public;
+revoke all on schema private from public, anon, authenticated;
+revoke all on all functions in schema private from public, anon, authenticated;
+revoke all on function public.create_organisation(text, text) from public, anon;
 grant execute on function public.create_organisation(text, text) to authenticated;
-grant execute on function public.is_organisation_member(uuid) to authenticated;
-grant execute on function public.has_organisation_role(uuid, public.organisation_role[]) to authenticated;
