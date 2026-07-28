@@ -8,6 +8,7 @@ type Organisation = {
   role: 'owner' | 'admin' | 'member' | 'viewer';
   organisations: { id: string; name: string; slug: string } | null;
 };
+type WorkspaceSection = 'overview' | 'imports' | 'exceptions' | 'actions';
 
 export default function HomePage() {
   const [user, setUser] = useState<User | null>(null);
@@ -21,6 +22,8 @@ export default function HomePage() {
   const [loadingOrganisations, setLoadingOrganisations] = useState(false);
   const [organisationName, setOrganisationName] = useState('');
   const [organisationSlug, setOrganisationSlug] = useState('');
+  const [selectedOrganisationId, setSelectedOrganisationId] = useState<string | null>(null);
+  const [workspaceSection, setWorkspaceSection] = useState<WorkspaceSection>('overview');
 
   useEffect(() => {
     void loadSession();
@@ -28,13 +31,20 @@ export default function HomePage() {
 
   useEffect(() => {
     if (user) void loadOrganisations();
-    else setMemberships([]);
+    else {
+      setMemberships([]);
+      setSelectedOrganisationId(null);
+    }
   }, [user]);
 
   const slugPreview = useMemo(() => {
     const source = organisationSlug || organisationName;
     return source.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   }, [organisationName, organisationSlug]);
+
+  const selectedOrganisation = memberships.find(
+    (membership) => membership.organisation_id === selectedOrganisationId,
+  ) ?? null;
 
   async function loadSession() {
     try {
@@ -143,6 +153,17 @@ export default function HomePage() {
     }
   }
 
+  function openOrganisation(organisationId: string) {
+    setSelectedOrganisationId(organisationId);
+    setWorkspaceSection('overview');
+    setMessage(null);
+  }
+
+  function closeOrganisation() {
+    setSelectedOrganisationId(null);
+    setWorkspaceSection('overview');
+  }
+
   async function signOut() {
     setBusy(true);
     await fetch('/api/auth', {
@@ -189,13 +210,90 @@ export default function HomePage() {
     );
   }
 
+  if (selectedOrganisation?.organisations) {
+    const organisation = selectedOrganisation.organisations;
+    return (
+      <main className="shell dashboard">
+        <div className="topbar">
+          <div className="brand"><span className="brand-mark">T</span><div><div>Trevecta Control</div><div className="small">{organisation.name} · {selectedOrganisation.role}</div></div></div>
+          <div className="topbar-actions">
+            <button className="button-secondary" onClick={closeOrganisation} type="button">Switch organisation</button>
+            <button className="button-secondary" disabled={busy} onClick={signOut} type="button">Sign out</button>
+          </div>
+        </div>
+
+        <section className="workspace-heading">
+          <div>
+            <div className="kicker">Organisation workspace</div>
+            <h1 className="workspace-title">{organisation.name}</h1>
+            <p className="lead">/{organisation.slug} · Your role: {selectedOrganisation.role}</p>
+          </div>
+        </section>
+
+        <nav className="workspace-nav" aria-label="Organisation workspace">
+          {(['overview', 'imports', 'exceptions', 'actions'] as WorkspaceSection[]).map((section) => (
+            <button
+              className={`workspace-tab ${workspaceSection === section ? 'active' : ''}`}
+              key={section}
+              onClick={() => setWorkspaceSection(section)}
+              type="button"
+            >
+              {section[0].toUpperCase() + section.slice(1)}
+            </button>
+          ))}
+        </nav>
+
+        {workspaceSection === 'overview' && (
+          <>
+            <section className="grid">
+              <div className="card metric"><span className="small">Imported datasets</span><strong>0</strong></div>
+              <div className="card metric"><span className="small">Open exceptions</span><strong>0</strong></div>
+              <div className="card metric"><span className="small">Overdue actions</span><strong>0</strong></div>
+            </section>
+            <section className="card workspace-empty">
+              <div className="kicker">Next step</div>
+              <h2>Upload the first commercial dataset</h2>
+              <p>The next build slice will add CSV import for budgets, purchase orders and contracts. The organisation boundary is now selected and ready to receive organisation-scoped data.</p>
+              <button className="button-primary" onClick={() => setWorkspaceSection('imports')} type="button">Go to imports</button>
+            </section>
+          </>
+        )}
+
+        {workspaceSection === 'imports' && (
+          <section className="card workspace-empty">
+            <div className="kicker">Imports</div>
+            <h2>No datasets uploaded yet</h2>
+            <p>This screen is now part of the selected organisation workspace. CSV upload, validation and column mapping are the next functional milestone.</p>
+            <button className="button-primary" disabled type="button">Upload CSV — next milestone</button>
+          </section>
+        )}
+
+        {workspaceSection === 'exceptions' && (
+          <section className="card workspace-empty">
+            <div className="kicker">Exceptions</div>
+            <h2>No control exceptions yet</h2>
+            <p>Exceptions will appear here after imported data is checked against Trevecta’s control rules.</p>
+          </section>
+        )}
+
+        {workspaceSection === 'actions' && (
+          <section className="card workspace-empty">
+            <div className="kicker">Actions</div>
+            <h2>No assigned actions yet</h2>
+            <p>Owners, due dates, comments and resolution history will be managed here.</p>
+          </section>
+        )}
+      </main>
+    );
+  }
+
   return (
     <main className="shell dashboard">
       <div className="topbar">
         <div className="brand"><span className="brand-mark">T</span><div><div>Trevecta Control</div><div className="small">Signed in as {user.email}</div></div></div>
         <button className="button-secondary" disabled={busy} onClick={signOut} type="button">Sign out</button>
       </div>
-      <section><div className="kicker">Control overview</div><h1 style={{ fontSize: 'clamp(42px, 6vw, 68px)', marginBottom: 10 }}>Your governance workspace.</h1><p className="lead">Authentication and tenant onboarding are connected to the live Supabase foundation through Vercel.</p></section>
+      <section><div className="kicker">Control overview</div><h1 className="workspace-title">Choose an organisation.</h1><p className="lead">Open an organisation to enter its governed workspace.</p></section>
       <section className="grid">
         <div className="card metric"><span className="small">Organisations</span><strong>{memberships.length}</strong></div>
         <div className="card metric"><span className="small">Open exceptions</span><strong>0</strong></div>
@@ -203,9 +301,14 @@ export default function HomePage() {
       </section>
       <section className="empty">
         <div className="card">
-          <h2>Your organisations</h2><p>Only organisations permitted by row-level security are returned.</p>
+          <h2>Your organisations</h2><p>Select one to open its workspace.</p>
           {loadingOrganisations ? <p>Loading…</p> : memberships.length === 0 ? <p>No organisation exists yet. Create the first one to become its owner.</p> : (
-            <div className="organisation-list">{memberships.map((membership) => <div className="organisation-row" key={membership.organisation_id}><strong>{membership.organisations?.name ?? 'Organisation'}</strong><div className="small">/{membership.organisations?.slug} · {membership.role}</div></div>)}</div>
+            <div className="organisation-list">{memberships.map((membership) => (
+              <button className="organisation-row" key={membership.organisation_id} onClick={() => openOrganisation(membership.organisation_id)} type="button">
+                <span><strong>{membership.organisations?.name ?? 'Organisation'}</strong><span className="small">/{membership.organisations?.slug} · {membership.role}</span></span>
+                <span className="open-label">Open →</span>
+              </button>
+            ))}</div>
           )}
         </div>
         <div className="card">
