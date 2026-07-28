@@ -5,6 +5,26 @@ const SUPABASE_URL = 'https://ensijapqbeyhkvtountf.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_u-a0I1UzP4GALLfSsH3ZuQ_faUSMbs5';
 const ACCESS_COOKIE = 'trevecta_access_token';
 
+type ImportPayload = {
+  organisation_id: string;
+  record_type: 'contract';
+  external_id: unknown;
+  supplier_name: unknown;
+  product_service: unknown;
+  contract_owner_name: unknown;
+  contract_owner_email: unknown;
+  sme_name: unknown;
+  sme_email: unknown;
+  start_date: unknown;
+  end_date: unknown;
+  annual_value: number | null;
+  currency: unknown;
+  status: unknown;
+  source_file_name: unknown;
+  source_row_number: number;
+  raw_data: Record<string, unknown>;
+};
+
 async function authedFetch(path: string, init: RequestInit = {}) {
   const store = await cookies();
   const token = store.get(ACCESS_COOKIE)?.value;
@@ -46,7 +66,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'This MVP import supports up to 500 rows at a time.' }, { status: 400 });
   }
 
-  const payload = records.map((record: Record<string, unknown>, index: number) => ({
+  const payload: ImportPayload[] = records.map((record: Record<string, unknown>, index: number) => ({
     organisation_id: organisationId,
     record_type: 'contract',
     external_id: record.external_id || null,
@@ -66,7 +86,7 @@ export async function POST(request: Request) {
     raw_data: record,
   }));
 
-  const invalid = payload.find((record) => !record.supplier_name || (record.end_date && Number.isNaN(Date.parse(String(record.end_date)))) || (record.sme_email && !String(record.sme_email).includes('@')) || (record.annual_value != null && !Number.isFinite(record.annual_value)));
+  const invalid = payload.find((record: ImportPayload) => !record.supplier_name || (record.end_date && Number.isNaN(Date.parse(String(record.end_date)))) || (record.sme_email && !String(record.sme_email).includes('@')) || (record.annual_value != null && !Number.isFinite(record.annual_value)));
   if (invalid) return NextResponse.json({ error: 'One or more rows contain an invalid supplier, date, SME email or annual value.' }, { status: 400 });
 
   const response = await authedFetch('/rest/v1/commercial_records', {
