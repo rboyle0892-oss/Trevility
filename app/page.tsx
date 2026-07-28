@@ -89,6 +89,30 @@ export default function HomePage() {
     }
   }
 
+  async function resendConfirmation() {
+    if (!email.trim()) {
+      setMessage({ type: 'error', text: 'Enter your email address first.' });
+      return;
+    }
+
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resend', email: email.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Unable to resend confirmation email.');
+      setMessage({ type: 'success', text: 'A new confirmation email has been sent. Use the newest email.' });
+    } catch (error) {
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Unable to resend confirmation email.' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createOrganisation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -156,6 +180,7 @@ export default function HomePage() {
               <label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" /></label>
               <label>Password<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={6} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 6 characters" /></label>
               <button className="button-primary" disabled={busy} type="submit">{busy ? 'Working…' : mode === 'login' ? 'Sign in securely' : 'Create account'}</button>
+              <button className="button-secondary" disabled={busy} onClick={resendConfirmation} type="button">Resend confirmation email</button>
               <div className={`message ${message?.type ?? ''}`} role="status">{message?.text ?? ''}</div>
             </form>
           </div>
