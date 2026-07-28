@@ -132,10 +132,17 @@ export default function OrganisationWorkspacePage() {
 
       <section className="empty">
         <div className="card">
-          <div className="kicker">1 · Import</div>
-          <h2>Import commercial data</h2>
-          <p>Use a CSV with at least <code>supplier_name</code>. To enable readiness requests include <code>end_date</code>, <code>sme_name</code> and <code>sme_email</code>.</p>
-          <p className="small">Dates: YYYY-MM-DD. Optional fields: {supportedHeaders.join(', ')}.</p>
+          <div className="kicker">1 · Prepare</div>
+          <h2>Download the CSV template</h2>
+          <p>Use the template to keep column names and date formats consistent. It contains one example row that can be replaced or deleted.</p>
+          <a className="button-secondary" download="trevecta-commercial-import-template.csv" href="/commercial-import-template.csv">Download CSV template</a>
+          <p className="small" style={{ marginTop: 16 }}>Required: <code>supplier_name</code>. For readiness requests also include <code>end_date</code>, <code>sme_name</code> and <code>sme_email</code>. Dates must use YYYY-MM-DD.</p>
+        </div>
+
+        <div className="card">
+          <div className="kicker">2 · Upload</div>
+          <h2>Upload completed CSV</h2>
+          <p>Select the completed template. Trevecta validates the file before saving any commercial records.</p>
           <label className="button-primary" style={{ display: 'inline-block', textAlign: 'center', cursor: busy ? 'wait' : 'pointer' }}>
             {busy ? 'Importing…' : 'Choose CSV file'}
             <input accept=".csv,text/csv" disabled={busy} onChange={importCsv} style={{ display: 'none' }} type="file" />
@@ -143,21 +150,21 @@ export default function OrganisationWorkspacePage() {
           {message && <div className="message success" role="status">{message}</div>}
           {error && <div className="message error" role="alert">{error}</div>}
         </div>
+      </section>
 
-        <div className="card">
-          <div className="kicker">Imported contracts</div>
-          <h2>Commercial register</h2>
-          {records.length === 0 ? <p>No commercial records imported yet.</p> : (
-            <div className="organisation-list">
-              {records.slice(0, 20).map((record) => (
-                <div className="organisation-row" key={record.id}>
-                  <div><strong>{record.supplier_name}</strong><div className="small">{record.product_service || 'No product/service'} · SME: {record.sme_email || 'missing'}</div></div>
-                  <div className="small" style={{ textAlign: 'right' }}>{record.end_date || 'No end date'}<br />{record.annual_value == null ? '' : `${record.currency} ${Number(record.annual_value).toLocaleString()}`}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      <section className="card" style={{ marginTop: 20 }}>
+        <div className="kicker">Imported contracts</div>
+        <h2>Commercial register</h2>
+        {records.length === 0 ? <p>No commercial records imported yet.</p> : (
+          <div className="organisation-list">
+            {records.slice(0, 20).map((record) => (
+              <div className="organisation-row" key={record.id}>
+                <div><strong>{record.supplier_name}</strong><div className="small">{record.product_service || 'No product/service'} · SME: {record.sme_email || 'missing'}</div></div>
+                <div className="small" style={{ textAlign: 'right' }}>{record.end_date || 'No end date'}<br />{record.annual_value == null ? '' : `${record.currency} ${Number(record.annual_value).toLocaleString()}`}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </main>
   );
