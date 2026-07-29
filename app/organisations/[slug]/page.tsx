@@ -43,15 +43,27 @@ function parseCsv(text: string) {
       row = []; cell = '';
     } else cell += char;
   }
+  if (quoted) throw new Error('The CSV contains an unclosed quoted value. Correct the affected row and try again.');
   row.push(cell.trim());
   if (row.some(Boolean)) rows.push(row);
   if (rows.length < 2) throw new Error('The CSV needs a header row and at least one data row.');
 
-  const headers = rows[0].map((header) => header.trim().toLowerCase());
+  const headers = rows[0].map((header, index) => (index === 0 ? header.replace(/^\uFEFF/, '') : header).trim().toLowerCase());
+  const blankHeaderIndex = headers.findIndex((header) => !header);
+  if (blankHeaderIndex !== -1) throw new Error(`Column ${blankHeaderIndex + 1} has no header. Add a supported column name or remove the empty column.`);
+  const duplicateHeaders = headers.filter((header, index) => headers.indexOf(header) !== index);
+  if (duplicateHeaders.length) throw new Error(`Duplicate columns are not allowed: ${[...new Set(duplicateHeaders)].join(', ')}`);
   const missing = requiredHeaders.filter((header) => !headers.includes(header));
   if (missing.length) throw new Error(`Missing required column: ${missing.join(', ')}`);
-  const unsupported = headers.filter((header) => header && !supportedHeaders.includes(header));
+  const unsupported = headers.filter((header) => !supportedHeaders.includes(header));
   if (unsupported.length) throw new Error(`Unsupported columns: ${unsupported.join(', ')}`);
+
+  const malformedRowIndex = rows.slice(1).findIndex((values) => values.length !== headers.length);
+  if (malformedRowIndex !== -1) {
+    const csvRowNumber = malformedRowIndex + 2;
+    const actualColumns = rows[malformedRowIndex + 1].length;
+    throw new Error(`Row ${csvRowNumber} has ${actualColumns} columns but the header has ${headers.length}. Check for missing commas, extra commas or unmatched quotes.`);
+  }
 
   return rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
 }
