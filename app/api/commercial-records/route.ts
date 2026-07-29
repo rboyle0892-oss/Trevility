@@ -90,21 +90,16 @@ export async function GET(request: Request) {
   if (!response) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
   const data = await response.json();
   if (!response.ok) return NextResponse.json({ error: data.message ?? 'Unable to load records.' }, { status: response.status });
-
   if (recordId) {
-    if (!Array.isArray(data) || data.length === 0) {
-      return NextResponse.json({ error: 'Commercial record not found or access is not permitted.' }, { status: 404 });
-    }
+    if (!Array.isArray(data) || data.length === 0) return NextResponse.json({ error: 'Commercial record not found or access is not permitted.' }, { status: 404 });
     return NextResponse.json({ record: data[0] });
   }
-
   return NextResponse.json({ records: data });
 }
 
 export async function PATCH(request: Request) {
   const auth = await getAuth();
   if (!auth) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
-
   const body = await request.json();
   const id = body.id as string | undefined;
   const organisationId = body.organisationId as string | undefined;
@@ -116,15 +111,9 @@ export async function PATCH(request: Request) {
   const payload = action === 'archive'
     ? { archived_at: new Date().toISOString(), archived_by: auth.userId, archive_reason: reason }
     : { archived_at: null, archived_by: null, archive_reason: null };
-
   const response = await fetch(`${SUPABASE_URL}/rest/v1/commercial_records?id=eq.${encodeURIComponent(id)}&organisation_id=eq.${encodeURIComponent(organisationId)}`, {
     method: 'PATCH',
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${auth.token}`,
-      'Content-Type': 'application/json',
-      Prefer: 'return=representation',
-    },
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
     body: JSON.stringify(payload),
     cache: 'no-store',
   });
@@ -138,7 +127,6 @@ export async function POST(request: Request) {
   const body = await request.json();
   const organisationId = body.organisationId as string | undefined;
   const records = Array.isArray(body.records) ? body.records : [];
-
   if (!organisationId || records.length === 0) return NextResponse.json({ error: 'Organisation and at least one record are required.' }, { status: 400 });
   if (records.length > 500) return NextResponse.json({ error: 'This MVP import supports up to 500 rows at a time.' }, { status: 400 });
 
@@ -162,32 +150,15 @@ export async function POST(request: Request) {
     raw_data: record,
   }));
 
-  const invalid = payload.find((record: ImportPayload) =>
-    !record.supplier_name ||
-    !String(record.supplier_name).trim() ||
-    !isValidIsoDate(record.start_date) ||
-    !isValidIsoDate(record.end_date) ||
-    hasInvalidDateRange(record.start_date, record.end_date) ||
-    !isValidEmail(record.sme_email) ||
-    !isValidEmail(record.contract_owner_email) ||
-    (record.annual_value != null && (!Number.isFinite(record.annual_value) || record.annual_value < 0))
-  );
-  if (invalid) {
-    return NextResponse.json({
-      error: `Row ${invalid.source_row_number} is invalid. Supplier is required; dates must be real YYYY-MM-DD dates with the start date not later than the end date; emails must be valid; annual value cannot be negative.`,
-    }, { status: 400 });
-  }
+  const invalid = payload.find((record) => !record.supplier_name || !String(record.supplier_name).trim() || !isValidIsoDate(record.start_date) || !isValidIsoDate(record.end_date) || hasInvalidDateRange(record.start_date, record.end_date) || !isValidEmail(record.sme_email) || !isValidEmail(record.contract_owner_email) || (record.annual_value != null && (!Number.isFinite(record.annual_value) || record.annual_value < 0)));
+  if (invalid) return NextResponse.json({ error: `Row ${invalid.source_row_number} is invalid. Supplier is required; dates must be real YYYY-MM-DD dates with the start date not later than the end date; emails must be valid; annual value cannot be negative.` }, { status: 400 });
 
   const incomingExternalIds = new Map<string, number>();
   for (const record of payload) {
     const externalId = normaliseExternalId(record.external_id);
     if (!externalId) continue;
     const previousRow = incomingExternalIds.get(externalId);
-    if (previousRow) {
-      return NextResponse.json({
-        error: `Rows ${previousRow} and ${record.source_row_number} use the same external_id. Remove or correct the duplicate before importing.`,
-      }, { status: 409 });
-    }
+    if (previousRow) return NextResponse.json({ error: `Rows ${previousRow} and ${record.source_row_number} use the same external_id. Remove or correct the duplicate before importing.` }, { status: 409 });
     incomingExternalIds.set(externalId, record.source_row_number);
   }
 
@@ -196,18 +167,9 @@ export async function POST(request: Request) {
     if (!existingResponse) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
     const existingData = await existingResponse.json();
     if (!existingResponse.ok) return NextResponse.json({ error: existingData.message ?? 'Unable to check for duplicate records.' }, { status: existingResponse.status });
-
-    const existingExternalIds = new Set(
-      (Array.isArray(existingData) ? existingData : [])
-        .map((record: { external_id?: unknown }) => normaliseExternalId(record.external_id))
-        .filter(Boolean)
-    );
+    const existingExternalIds = new Set((Array.isArray(existingData) ? existingData : []).map((record: { external_id?: unknown }) => normaliseExternalId(record.external_id)).filter(Boolean));
     const duplicate = [...incomingExternalIds.entries()].find(([externalId]) => existingExternalIds.has(externalId));
-    if (duplicate) {
-      return NextResponse.json({
-        error: `Row ${duplicate[1]} matches an active record with external_id "${String(payload[duplicate[1] - 2].external_id)}". Archive, update or remove the existing record before importing a replacement.`,
-      }, { status: 409 });
-    }
+    if (duplicate) return NextResponse.json({ error: `Row ${duplicate[1]} matches an active record with external_id "${String(payload[duplicate[1] - 2].external_id)}". Archive, update or remove the existing record before importing a replacement.` }, { status: 409 });
   }
 
   const response = await authedFetch('/rest/v1/commercial_records', { method: 'POST', body: JSON.stringify(payload) });
@@ -216,6 +178,15 @@ export async function POST(request: Request) {
   if (!response.ok) return NextResponse.json({ error: data.message ?? 'Import failed.' }, { status: response.status });
 
   const readinessResponse = await authedFetch('/rest/v1/rpc/create_readiness_requests_for_due_records', { method: 'POST', body: JSON.stringify({ target_organisation_id: organisationId }) });
-  const readinessCreated = readinessResponse?.ok ? await readinessResponse.json() : 0;
-  return NextResponse.json({ imported: data.length, readinessCreated, records: data });
+  if (!readinessResponse?.ok) {
+    let detail = 'Readiness generation did not complete. The commercial records were saved successfully.';
+    try {
+      const readinessError = await readinessResponse?.json();
+      if (readinessError?.message) detail = `Readiness generation did not complete: ${readinessError.message}`;
+    } catch { /* preserve safe generic detail */ }
+    return NextResponse.json({ imported: data.length, records: data, readinessCreated: null, readinessStatus: 'failed', readinessWarning: detail });
+  }
+
+  const readinessCreated = await readinessResponse.json();
+  return NextResponse.json({ imported: data.length, readinessCreated, readinessStatus: 'succeeded', records: data });
 }
