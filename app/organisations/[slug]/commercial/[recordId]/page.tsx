@@ -34,6 +34,7 @@ export default function CommercialRecordPage() {
   const [organisation, setOrganisation] = useState<Organisation | null>(null);
   const [record, setRecord] = useState<CommercialRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -61,8 +62,32 @@ export default function CommercialRecordPage() {
     void load();
   }, [params.recordId, params.slug]);
 
+  async function archiveRecord() {
+    if (!record || !organisation) return;
+    const reason = window.prompt('Why is this record being archived? This will be retained in the audit data.');
+    if (reason === null) return;
+    if (!reason.trim()) { setError('An archive reason is required.'); return; }
+    if (!window.confirm(`Archive ${record.supplier_name}? It will be removed from active dashboard totals.`)) return;
+
+    setArchiving(true); setError(null);
+    try {
+      const response = await fetch('/api/commercial-records', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: record.id, organisationId: organisation.organisation_id, action: 'archive', reason }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Unable to archive record.');
+      window.location.href = `/organisations/${params.slug}`;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to archive record.');
+      setArchiving(false);
+    }
+  }
+
   if (loading) return <main className="shell"><div className="card">Opening commercial record…</div></main>;
-  if (error || !record || !organisation?.organisations) return <main className="shell"><div className="card"><h2>Record unavailable</h2><p>{error}</p><a className="button-secondary" href={`/organisations/${params.slug}`}>Back to workspace</a></div></main>;
+  if (error && (!record || !organisation?.organisations)) return <main className="shell"><div className="card"><h2>Record unavailable</h2><p>{error}</p><a className="button-secondary" href={`/organisations/${params.slug}`}>Back to workspace</a></div></main>;
+  if (!record || !organisation?.organisations) return null;
 
   const triggerDate = record.end_date ? new Date(`${record.end_date}T00:00:00`) : null;
   if (triggerDate) triggerDate.setDate(triggerDate.getDate() - 100);
@@ -106,6 +131,14 @@ export default function CommercialRecordPage() {
           <p><strong>SME email:</strong> {record.sme_email || 'Not provided'}</p>
           <p className="small">The no-login readiness form and email delivery are the next workflow step.</p>
         </div>
+      </section>
+
+      <section className="card" style={{ marginTop: 20 }}>
+        <div className="kicker">Record management</div>
+        <h2>Archive this record</h2>
+        <p>Archive incorrect, duplicated or no-longer-active records. Archived records are removed from active dashboard totals while retaining the reason, user and timestamp.</p>
+        <button className="button-secondary" disabled={archiving} onClick={archiveRecord} type="button">{archiving ? 'Archiving…' : 'Archive record'}</button>
+        {error && <div className="message error" role="alert">{error}</div>}
       </section>
     </main>
   );
