@@ -93,6 +93,13 @@ export default function CommercialRecordPage() {
   const triggerDate = record.end_date ? new Date(`${record.end_date}T00:00:00`) : null;
   if (triggerDate) triggerDate.setDate(triggerDate.getDate() - 100);
   const isDue = triggerDate ? triggerDate.getTime() <= Date.now() : false;
+  const readinessTiming = !record.end_date
+    ? 'End date missing'
+    : !record.sme_email
+      ? 'SME contact missing'
+      : isDue
+        ? 'Inside 100-day window'
+        : 'Not yet in window';
 
   return (
     <main className="shell dashboard">
@@ -110,7 +117,7 @@ export default function CommercialRecordPage() {
       <section className="grid">
         <div className="card metric"><span className="small">End date</span><strong style={{ fontSize: 28 }}>{formatDate(record.end_date)}</strong></div>
         <div className="card metric"><span className="small">Readiness trigger</span><strong style={{ fontSize: 28 }}>{triggerDate ? triggerDate.toLocaleDateString('en-GB') : 'Not available'}</strong></div>
-        <div className="card metric"><span className="small">Readiness status</span><strong style={{ fontSize: 28 }}>{!record.sme_email ? 'Missing SME email' : isDue ? 'Request due now' : 'Waiting for trigger'}</strong></div>
+        <div className="card metric"><span className="small">Readiness timing</span><strong style={{ fontSize: 28 }}>{readinessTiming}</strong><span className="small">Calculated from contract fields only</span></div>
       </section>
 
       <section className="empty">
@@ -130,7 +137,7 @@ export default function CommercialRecordPage() {
           <p><strong>Owner email:</strong> {record.contract_owner_email || 'Not provided'}</p>
           <p><strong>SME:</strong> {record.sme_name || 'Not provided'}</p>
           <p><strong>SME email:</strong> {record.sme_email || 'Not provided'}</p>
-          <p className="small">The no-login readiness form and email delivery are the next workflow step.</p>
+          <p className="small">Readiness delivery, response, reminder and escalation states are not yet connected to this page.</p>
         </div>
       </section>
 
