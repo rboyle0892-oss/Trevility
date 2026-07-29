@@ -39,6 +39,15 @@ function isValidEmail(value: unknown) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value).trim());
 }
 
+function normaliseExternalId(value: unknown) {
+  return value == null ? '' : String(value).trim().toLowerCase();
+}
+
+function hasInvalidDateRange(startDate: unknown, endDate: unknown) {
+  if (!startDate || !endDate) return false;
+  return String(startDate).trim() > String(endDate).trim();
+}
+
 async function getAuth() {
   const store = await cookies();
   const token = store.get(ACCESS_COOKIE)?.value;
@@ -125,7 +134,7 @@ export async function POST(request: Request) {
   const payload: ImportPayload[] = records.map((record: Record<string, unknown>, index: number) => ({
     organisation_id: organisationId,
     record_type: 'contract',
-    external_id: record.external_id || null,
+    external_id: typeof record.external_id === 'string' ? record.external_id.trim() || null : record.external_id || null,
     supplier_name: typeof record.supplier_name === 'string' ? record.supplier_name.trim() : record.supplier_name,
     product_service: record.product_service || null,
     contract_owner_name: record.contract_owner_name || null,
@@ -147,14 +156,47 @@ export async function POST(request: Request) {
     !String(record.supplier_name).trim() ||
     !isValidIsoDate(record.start_date) ||
     !isValidIsoDate(record.end_date) ||
+    hasInvalidDateRange(record.start_date, record.end_date) ||
     !isValidEmail(record.sme_email) ||
     !isValidEmail(record.contract_owner_email) ||
     (record.annual_value != null && (!Number.isFinite(record.annual_value) || record.annual_value < 0))
   );
   if (invalid) {
     return NextResponse.json({
-      error: `Row ${invalid.source_row_number} is invalid. Supplier is required; dates must be real YYYY-MM-DD dates; emails must be valid; annual value cannot be negative.`,
+      error: `Row ${invalid.source_row_number} is invalid. Supplier is required; dates must be real YYYY-MM-DD dates with the start date not later than the end date; emails must be valid; annual value cannot be negative.`,
     }, { status: 400 });
+  }
+
+  const incomingExternalIds = new Map<string, number>();
+  for (const record of payload) {
+    const externalId = normaliseExternalId(record.external_id);
+    if (!externalId) continue;
+    const previousRow = incomingExternalIds.get(externalId);
+    if (previousRow) {
+      return NextResponse.json({
+        error: `Rows ${previousRow} and ${record.source_row_number} use the same external_id. Remove or correct the duplicate before importing.`,
+      }, { status: 409 });
+    }
+    incomingExternalIds.set(externalId, record.source_row_number);
+  }
+
+  if (incomingExternalIds.size > 0) {
+    const existingResponse = await authedFetch(`/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}&archived_at=is.null&external_id=not.is.null&select=external_id`);
+    if (!existingResponse) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
+    const existingData = await existingResponse.json();
+    if (!existingResponse.ok) return NextResponse.json({ error: existingData.message ?? 'Unable to check for duplicate records.' }, { status: existingResponse.status });
+
+    const existingExternalIds = new Set(
+      (Array.isArray(existingData) ? existingData : [])
+        .map((record: { external_id?: unknown }) => normaliseExternalId(record.external_id))
+        .filter(Boolean)
+    );
+    const duplicate = [...incomingExternalIds.entries()].find(([externalId]) => existingExternalIds.has(externalId));
+    if (duplicate) {
+      return NextResponse.json({
+        error: `Row ${duplicate[1]} matches an active record with external_id "${String(payload[duplicate[1] - 2].external_id)}". Archive, update or remove the existing record before importing a replacement.`,
+      }, { status: 409 });
+    }
   }
 
   const response = await authedFetch('/rest/v1/commercial_records', { method: 'POST', body: JSON.stringify(payload) });
