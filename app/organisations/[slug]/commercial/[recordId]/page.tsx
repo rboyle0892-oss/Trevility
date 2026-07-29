@@ -48,12 +48,10 @@ export default function CommercialRecordPage() {
         if (!selected) throw new Error('Organisation not found or access is not permitted.');
         setOrganisation(selected);
 
-        const recordsResponse = await fetch(`/api/commercial-records?organisationId=${encodeURIComponent(selected.organisation_id)}`, { cache: 'no-store' });
-        const recordsData = await recordsResponse.json();
-        if (!recordsResponse.ok) throw new Error(recordsData.error ?? 'Unable to load commercial record.');
-        const selectedRecord = (recordsData.records as CommercialRecord[]).find((item) => item.id === params.recordId);
-        if (!selectedRecord) throw new Error('Commercial record not found or access is not permitted.');
-        setRecord(selectedRecord);
+        const recordResponse = await fetch(`/api/commercial-records?organisationId=${encodeURIComponent(selected.organisation_id)}&recordId=${encodeURIComponent(params.recordId)}`, { cache: 'no-store' });
+        const recordData = await recordResponse.json();
+        if (!recordResponse.ok) throw new Error(recordData.error ?? 'Unable to load commercial record.');
+        setRecord(recordData.record as CommercialRecord);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Unable to load commercial record.');
       } finally {
