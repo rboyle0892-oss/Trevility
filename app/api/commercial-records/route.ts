@@ -80,14 +80,25 @@ async function authedFetch(path: string, init: RequestInit = {}) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const organisationId = searchParams.get('organisationId');
+  const recordId = searchParams.get('recordId');
   const includeArchived = searchParams.get('includeArchived') === 'true';
   if (!organisationId) return NextResponse.json({ error: 'Organisation is required.' }, { status: 400 });
 
   const archiveFilter = includeArchived ? '' : '&archived_at=is.null';
-  const response = await authedFetch(`/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}${archiveFilter}&select=*&order=end_date.asc.nullslast,created_at.desc`);
+  const recordFilter = recordId ? `&id=eq.${encodeURIComponent(recordId)}` : '';
+  const response = await authedFetch(`/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}${recordFilter}${archiveFilter}&select=*&order=end_date.asc.nullslast,created_at.desc`);
   if (!response) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
   const data = await response.json();
-  return NextResponse.json(response.ok ? { records: data } : { error: data.message ?? 'Unable to load records.' }, { status: response.status });
+  if (!response.ok) return NextResponse.json({ error: data.message ?? 'Unable to load records.' }, { status: response.status });
+
+  if (recordId) {
+    if (!Array.isArray(data) || data.length === 0) {
+      return NextResponse.json({ error: 'Commercial record not found or access is not permitted.' }, { status: 404 });
+    }
+    return NextResponse.json({ record: data[0] });
+  }
+
+  return NextResponse.json({ records: data });
 }
 
 export async function PATCH(request: Request) {
