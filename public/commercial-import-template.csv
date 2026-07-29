@@ -1,2 +1,1 @@
 external_id,supplier_name,product_service,contract_owner_name,contract_owner_email,sme_name,sme_email,start_date,end_date,annual_value,currency,status
-CON-001,Example Supplier,Example Service,Contract Owner,owner@example.com,Subject Matter Expert,sme@example.com,2026-01-01,2027-01-01,50000,GBP,Active
