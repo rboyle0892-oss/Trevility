@@ -114,7 +114,7 @@ export default function OrganisationWorkspacePage() {
 
   async function importCsv(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!file || !membership) return;
+    if (!file || !membership || membership.role === 'viewer') return;
     setBusy(true); setError(null); setMessage(null);
     try {
       const parsed = parseCsv(await file.text());
@@ -156,6 +156,7 @@ export default function OrganisationWorkspacePage() {
   if (error && !membership?.organisations) return <main className="shell"><div className="card"><h2>Workspace unavailable</h2><p>{error}</p><a className="button-secondary" href="/">Back to organisations</a></div></main>;
   if (!membership?.organisations) return null;
   const organisation = membership.organisations;
+  const canManageCommercialData = membership.role !== 'viewer';
 
   return (
     <main className="shell dashboard">
@@ -164,7 +165,7 @@ export default function OrganisationWorkspacePage() {
         <a className="button-secondary" href="/">Switch organisation</a>
       </div>
 
-      <section><div className="kicker">Organisation workspace</div><h1 style={{ fontSize: 'clamp(42px, 6vw, 68px)', marginBottom: 10 }}>{organisation.name}</h1><p className="lead">Import commercial records now; readiness requests are created when a contract reaches 100 days before its end date.</p></section>
+      <section><div className="kicker">Organisation workspace</div><h1 style={{ fontSize: 'clamp(42px, 6vw, 68px)', marginBottom: 10 }}>{organisation.name}</h1><p className="lead">Import commercial records and review contracts approaching the 100-day readiness window.</p></section>
 
       <section className="grid">
         <button className="card metric" onClick={() => setFilter('all')} style={{ textAlign: 'left', cursor: 'pointer' }} type="button"><span className="small">Imported records</span><strong>{records.length}</strong><span className="small">View all →</span></button>
@@ -182,15 +183,25 @@ export default function OrganisationWorkspacePage() {
         </div>
 
         <div className="card">
-          <div className="kicker">2 · Upload</div>
-          <h2>Upload completed CSV</h2>
-          <p>Select the completed template. Trevecta validates the file before saving any commercial records.</p>
-          <label className="button-primary" style={{ display: 'inline-block', textAlign: 'center', cursor: busy ? 'wait' : 'pointer' }}>
-            {busy ? 'Importing…' : 'Choose CSV file'}
-            <input accept=".csv,text/csv" disabled={busy} onChange={importCsv} style={{ display: 'none' }} type="file" />
-          </label>
-          {message && <div className="message success" role="status">{message}</div>}
-          {error && <div className="message error" role="alert">{error}</div>}
+          {canManageCommercialData ? (
+            <>
+              <div className="kicker">2 · Upload</div>
+              <h2>Upload completed CSV</h2>
+              <p>Select the completed template. Trevecta validates the file before saving any commercial records.</p>
+              <label className="button-primary" style={{ display: 'inline-block', textAlign: 'center', cursor: busy ? 'wait' : 'pointer' }}>
+                {busy ? 'Importing…' : 'Choose CSV file'}
+                <input accept=".csv,text/csv" disabled={busy} onChange={importCsv} style={{ display: 'none' }} type="file" />
+              </label>
+              {message && <div className="message success" role="status">{message}</div>}
+              {error && <div className="message error" role="alert">{error}</div>}
+            </>
+          ) : (
+            <>
+              <div className="kicker">Read-only access</div>
+              <h2>Commercial imports are restricted</h2>
+              <p>You can review the commercial register, but an owner, admin or member is required to import or change commercial data.</p>
+            </>
+          )}
         </div>
       </section>
 
