@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 
 type Organisation = {
   organisation_id: string;
+  role: 'owner' | 'admin' | 'member' | 'viewer';
   organisations: { id: string; name: string; slug: string } | null;
 };
 
@@ -63,7 +64,7 @@ export default function CommercialRecordPage() {
   }, [params.recordId, params.slug]);
 
   async function archiveRecord() {
-    if (!record || !organisation) return;
+    if (!record || !organisation || organisation.role === 'viewer') return;
     const reason = window.prompt('Why is this record being archived? This will be retained in the audit data.');
     if (reason === null) return;
     if (!reason.trim()) { setError('An archive reason is required.'); return; }
@@ -135,10 +136,19 @@ export default function CommercialRecordPage() {
 
       <section className="card" style={{ marginTop: 20 }}>
         <div className="kicker">Record management</div>
-        <h2>Archive this record</h2>
-        <p>Archive incorrect, duplicated or no-longer-active records. Archived records are removed from active dashboard totals while retaining the reason, user and timestamp.</p>
-        <button className="button-secondary" disabled={archiving} onClick={archiveRecord} type="button">{archiving ? 'Archiving…' : 'Archive record'}</button>
-        {error && <div className="message error" role="alert">{error}</div>}
+        {organisation.role === 'viewer' ? (
+          <>
+            <h2>Read-only record</h2>
+            <p>You can review this record, but an owner, admin or member is required to archive or change commercial data.</p>
+          </>
+        ) : (
+          <>
+            <h2>Archive this record</h2>
+            <p>Archive incorrect, duplicated or no-longer-active records. Archived records are removed from active dashboard totals while retaining the reason, user and timestamp.</p>
+            <button className="button-secondary" disabled={archiving} onClick={archiveRecord} type="button">{archiving ? 'Archiving…' : 'Archive record'}</button>
+            {error && <div className="message error" role="alert">{error}</div>}
+          </>
+        )}
       </section>
     </main>
   );
