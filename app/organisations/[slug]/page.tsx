@@ -1,6 +1,6 @@
 'use client';
 
-import { ChangeEvent, useEffect, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 
 type Organisation = {
@@ -19,6 +19,8 @@ type CommercialRecord = {
   annual_value: number | null;
   currency: string;
 };
+
+type RegisterFilter = 'all' | 'ending_100' | 'missing_sme';
 
 const requiredHeaders = ['supplier_name'];
 const supportedHeaders = ['external_id','supplier_name','product_service','contract_owner_name','contract_owner_email','sme_name','sme_email','start_date','end_date','annual_value','currency','status'];
@@ -54,6 +56,12 @@ function parseCsv(text: string) {
   return rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
 }
 
+function isEndingWithin100Days(record: CommercialRecord) {
+  if (!record.end_date) return false;
+  const difference = new Date(record.end_date).getTime() - Date.now();
+  return difference >= 0 && difference <= 100 * 86400000;
+}
+
 export default function OrganisationWorkspacePage() {
   const params = useParams<{ slug: string }>();
   const [membership, setMembership] = useState<Organisation | null>(null);
@@ -62,6 +70,8 @@ export default function OrganisationWorkspacePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<RegisterFilter>('all');
 
   async function loadRecords(organisationId: string) {
     const response = await fetch(`/api/commercial-records?organisationId=${encodeURIComponent(organisationId)}`, { cache: 'no-store' });
@@ -110,10 +120,25 @@ export default function OrganisationWorkspacePage() {
       }
       setMessage(`${data.imported} commercial records imported. ${data.readinessCreated || 0} readiness request(s) created. Review the imported records below.`);
       await loadRecords(membership.organisation_id);
+      setFilter('all');
+      setSearch('');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Import failed.');
     } finally { setBusy(false); event.target.value = ''; }
   }
+
+  const endingWithin100Days = records.filter(isEndingWithin100Days).length;
+  const missingSme = records.filter((record) => !record.sme_email).length;
+  const visibleRecords = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return records.filter((record) => {
+      if (filter === 'ending_100' && !isEndingWithin100Days(record)) return false;
+      if (filter === 'missing_sme' && record.sme_email) return false;
+      if (!term) return true;
+      return [record.supplier_name, record.product_service, record.sme_name, record.sme_email]
+        .some((value) => value?.toLowerCase().includes(term));
+    });
+  }, [filter, records, search]);
 
   if (loading) return <main className="shell"><div className="card">Opening secure workspace…</div></main>;
   if (error && !membership?.organisations) return <main className="shell"><div className="card"><h2>Workspace unavailable</h2><p>{error}</p><a className="button-secondary" href="/">Back to organisations</a></div></main>;
@@ -130,9 +155,9 @@ export default function OrganisationWorkspacePage() {
       <section><div className="kicker">Organisation workspace</div><h1 style={{ fontSize: 'clamp(42px, 6vw, 68px)', marginBottom: 10 }}>{organisation.name}</h1><p className="lead">Import commercial records now; readiness requests are created when a contract reaches 100 days before its end date.</p></section>
 
       <section className="grid">
-        <div className="card metric"><span className="small">Imported records</span><strong>{records.length}</strong></div>
-        <div className="card metric"><span className="small">Ending within 100 days</span><strong>{records.filter((record) => record.end_date && new Date(record.end_date).getTime() - Date.now() <= 100 * 86400000 && new Date(record.end_date).getTime() >= Date.now()).length}</strong></div>
-        <div className="card metric"><span className="small">Missing SME email</span><strong>{records.filter((record) => !record.sme_email).length}</strong></div>
+        <button className="card metric" onClick={() => setFilter('all')} style={{ textAlign: 'left', cursor: 'pointer' }} type="button"><span className="small">Imported records</span><strong>{records.length}</strong><span className="small">View all →</span></button>
+        <button className="card metric" onClick={() => setFilter('ending_100')} style={{ textAlign: 'left', cursor: 'pointer' }} type="button"><span className="small">Ending within 100 days</span><strong>{endingWithin100Days}</strong><span className="small">Review renewals →</span></button>
+        <button className="card metric" onClick={() => setFilter('missing_sme')} style={{ textAlign: 'left', cursor: 'pointer' }} type="button"><span className="small">Missing SME email</span><strong>{missingSme}</strong><span className="small">Resolve gaps →</span></button>
       </section>
 
       <section className="empty">
@@ -160,9 +185,18 @@ export default function OrganisationWorkspacePage() {
       <section className="card" style={{ marginTop: 20 }}>
         <div className="kicker">Imported contracts</div>
         <h2>Commercial register</h2>
-        {records.length === 0 ? <p>No commercial records imported yet.</p> : (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+          <input aria-label="Search commercial register" onChange={(event) => setSearch(event.target.value)} placeholder="Search supplier, service or SME" style={{ flex: '1 1 280px', minHeight: 44, padding: '0 14px' }} type="search" value={search} />
+          <select aria-label="Filter commercial register" onChange={(event) => setFilter(event.target.value as RegisterFilter)} style={{ minHeight: 44, padding: '0 14px' }} value={filter}>
+            <option value="all">All active records</option>
+            <option value="ending_100">Ending within 100 days</option>
+            <option value="missing_sme">Missing SME email</option>
+          </select>
+          {(search || filter !== 'all') && <button className="button-secondary" onClick={() => { setSearch(''); setFilter('all'); }} type="button">Clear filters</button>}
+        </div>
+        {records.length === 0 ? <p>No commercial records imported yet.</p> : visibleRecords.length === 0 ? <div className="message" role="status">No records match the current search or filter.</div> : (
           <div className="organisation-list">
-            {records.slice(0, 20).map((record) => (
+            {visibleRecords.slice(0, 50).map((record) => (
               <a className="organisation-row" href={`/organisations/${params.slug}/commercial/${record.id}`} key={record.id} style={{ color: 'inherit', textDecoration: 'none' }}>
                 <div><strong>{record.supplier_name}</strong><div className="small">{record.product_service || 'No product/service'} · SME: {record.sme_email || 'missing'}</div></div>
                 <div className="small" style={{ textAlign: 'right' }}>{record.end_date || 'No end date'}<br />{record.annual_value == null ? '' : `${record.currency} ${Number(record.annual_value).toLocaleString()}`}<br />Open record →</div>
@@ -170,6 +204,7 @@ export default function OrganisationWorkspacePage() {
             ))}
           </div>
         )}
+        {visibleRecords.length > 50 && <p className="small" style={{ marginTop: 14 }}>Showing the first 50 matching records. Pagination is still required for larger registers.</p>}
       </section>
     </main>
   );
