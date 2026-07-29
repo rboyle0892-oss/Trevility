@@ -25,6 +25,20 @@ type ImportPayload = {
   raw_data: Record<string, unknown>;
 };
 
+function isValidIsoDate(value: unknown) {
+  if (value == null || value === '') return true;
+  const text = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const [year, month, day] = text.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function isValidEmail(value: unknown) {
+  if (value == null || value === '') return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value).trim());
+}
+
 async function getAuth() {
   const store = await cookies();
   const token = store.get(ACCESS_COOKIE)?.value;
@@ -112,7 +126,7 @@ export async function POST(request: Request) {
     organisation_id: organisationId,
     record_type: 'contract',
     external_id: record.external_id || null,
-    supplier_name: record.supplier_name,
+    supplier_name: typeof record.supplier_name === 'string' ? record.supplier_name.trim() : record.supplier_name,
     product_service: record.product_service || null,
     contract_owner_name: record.contract_owner_name || null,
     contract_owner_email: record.contract_owner_email || null,
@@ -128,8 +142,20 @@ export async function POST(request: Request) {
     raw_data: record,
   }));
 
-  const invalid = payload.find((record: ImportPayload) => !record.supplier_name || (record.end_date && Number.isNaN(Date.parse(String(record.end_date)))) || (record.sme_email && !String(record.sme_email).includes('@')) || (record.annual_value != null && !Number.isFinite(record.annual_value)));
-  if (invalid) return NextResponse.json({ error: 'One or more rows contain an invalid supplier, date, SME email or annual value.' }, { status: 400 });
+  const invalid = payload.find((record: ImportPayload) =>
+    !record.supplier_name ||
+    !String(record.supplier_name).trim() ||
+    !isValidIsoDate(record.start_date) ||
+    !isValidIsoDate(record.end_date) ||
+    !isValidEmail(record.sme_email) ||
+    !isValidEmail(record.contract_owner_email) ||
+    (record.annual_value != null && (!Number.isFinite(record.annual_value) || record.annual_value < 0))
+  );
+  if (invalid) {
+    return NextResponse.json({
+      error: `Row ${invalid.source_row_number} is invalid. Supplier is required; dates must be real YYYY-MM-DD dates; emails must be valid; annual value cannot be negative.`,
+    }, { status: 400 });
+  }
 
   const response = await authedFetch('/rest/v1/commercial_records', { method: 'POST', body: JSON.stringify(payload) });
   if (!response) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
