@@ -26,7 +26,7 @@ type CommercialRecord = {
   created_at: string;
 };
 
-type RegisterFilter = 'all' | 'ending_100' | 'missing_owner' | 'missing_sme' | 'missing_end_date';
+type RegisterFilter = 'all' | 'ending_100' | 'expired' | 'missing_owner' | 'missing_sme' | 'missing_end_date';
 
 type ActionItem = {
   record: CommercialRecord;
@@ -91,6 +91,11 @@ function isEndingWithin100Days(record: CommercialRecord) {
   return days != null && days >= 0 && days <= 100;
 }
 
+function isExpired(record: CommercialRecord) {
+  const days = daysUntilEnd(record);
+  return days != null && days < 0;
+}
+
 function formatMoney(value: number, currency: string) {
   try {
     return new Intl.NumberFormat('en-GB', { style: 'currency', currency: currency || 'GBP', maximumFractionDigits: 0 }).format(value);
@@ -107,7 +112,7 @@ function buildActions(records: CommercialRecord[]): ActionItem[] {
     if (!record.contract_owner_email) actions.push({ record, priority: 'High', reason: 'No accountable owner', nextAction: 'Assign the contract or pillar owner' });
     if (!record.sme_email) actions.push({ record, priority: 'High', reason: 'No SME email', nextAction: 'Add the SME who will complete readiness' });
     if (days != null && days < 0) actions.push({ record, priority: 'High', reason: `Expired ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago`, nextAction: 'Confirm renewal, closure or replacement' });
-    else if (days != null && days <= 100) actions.push({ record, priority: days <= 30 ? 'High' : 'Medium', reason: `${days} day${days === 1 ? '' : 's'} to expiry`, nextAction: 'Open or reconcile the readiness request' });
+    else if (days != null && days <= 100) actions.push({ record, priority: days <= 30 ? 'High' : 'Medium', reason: `${days} day${days === 1 ? '' : 's'} to expiry`, nextAction: 'Check whether a readiness request exists and requires action' });
   }
   return actions.sort((a, b) => (a.priority === b.priority ? 0 : a.priority === 'High' ? -1 : 1));
 }
@@ -122,6 +127,7 @@ export default function OrganisationWorkspacePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<RegisterFilter>('all');
+  const [showAllActions, setShowAllActions] = useState(false);
 
   async function loadRecords(organisationId: string) {
     const response = await fetch(`/api/commercial-records?organisationId=${encodeURIComponent(organisationId)}`, { cache: 'no-store' });
@@ -172,6 +178,7 @@ export default function OrganisationWorkspacePage() {
       await loadRecords(membership.organisation_id);
       setFilter('all');
       setSearch('');
+      setShowAllActions(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Import failed.');
     } finally { setBusy(false); event.target.value = ''; }
@@ -181,12 +188,22 @@ export default function OrganisationWorkspacePage() {
   const missingSme = records.filter((record) => !record.sme_email).length;
   const missingOwner = records.filter((record) => !record.contract_owner_email).length;
   const missingEndDate = records.filter((record) => !record.end_date).length;
-  const totalExposure = records.reduce((sum, record) => sum + (record.annual_value ?? 0), 0);
+  const exposureByCurrency = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const record of records) {
+      if (record.annual_value == null) continue;
+      const currency = (record.currency || 'GBP').trim().toUpperCase();
+      totals.set(currency, (totals.get(currency) ?? 0) + Number(record.annual_value));
+    }
+    return [...totals.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [records]);
   const actions = useMemo(() => buildActions(records), [records]);
+  const displayedActions = showAllActions ? actions : actions.slice(0, 10);
   const visibleRecords = useMemo(() => {
     const term = search.trim().toLowerCase();
     return records.filter((record) => {
       if (filter === 'ending_100' && !isEndingWithin100Days(record)) return false;
+      if (filter === 'expired' && !isExpired(record)) return false;
       if (filter === 'missing_owner' && record.contract_owner_email) return false;
       if (filter === 'missing_sme' && record.sme_email) return false;
       if (filter === 'missing_end_date' && record.end_date) return false;
@@ -213,7 +230,11 @@ export default function OrganisationWorkspacePage() {
 
       <section className="grid">
         <button className="card metric" onClick={() => setFilter('all')} style={{ textAlign: 'left', cursor: 'pointer' }} type="button"><span className="small">Active commercial records</span><strong>{records.length}</strong><span className="small">Open register →</span></button>
-        <div className="card metric"><span className="small">Annual commercial exposure</span><strong style={{ fontSize: 30 }}>{formatMoney(totalExposure, 'GBP')}</strong><span className="small">Across active records</span></div>
+        <div className="card metric">
+          <span className="small">Annual commercial exposure</span>
+          {exposureByCurrency.length === 0 ? <strong style={{ fontSize: 30 }}>No values</strong> : exposureByCurrency.map(([currency, value]) => <strong key={currency} style={{ fontSize: exposureByCurrency.length === 1 ? 30 : 23 }}>{formatMoney(value, currency)}</strong>)}
+          <span className="small">Source currencies shown separately · no FX conversion</span>
+        </div>
         <button className="card metric" onClick={() => setFilter('ending_100')} style={{ textAlign: 'left', cursor: 'pointer' }} type="button"><span className="small">Within 100-day window</span><strong>{endingWithin100Days}</strong><span className="small">Review readiness →</span></button>
         <button className="card metric" onClick={() => setFilter('missing_owner')} style={{ textAlign: 'left', cursor: 'pointer' }} type="button"><span className="small">Missing accountable owner</span><strong>{missingOwner}</strong><span className="small">Assign ownership →</span></button>
       </section>
@@ -221,10 +242,10 @@ export default function OrganisationWorkspacePage() {
       <section className="card" style={{ marginTop: 20 }}>
         <div className="kicker">Today&apos;s work</div>
         <h2>BAU action queue</h2>
-        <p>Generated from expiry, ownership and readiness data. High-priority gaps are shown first.</p>
-        {actions.length === 0 ? <div className="message success" role="status">No immediate data-quality or renewal actions identified.</div> : (
+        <p>Derived from the active commercial register&apos;s expiry, ownership and SME fields. Readiness delivery, response and escalation states are not yet connected.</p>
+        {records.length === 0 ? <div className="message" role="status">No commercial records are loaded, so Trevecta cannot assess current BAU risk.</div> : actions.length === 0 ? <div className="message success" role="status">No immediate data-quality or renewal actions were derived from the active register.</div> : (
           <div className="organisation-list">
-            {actions.slice(0, 10).map((action, index) => (
+            {displayedActions.map((action, index) => (
               <a className="organisation-row" href={`/organisations/${params.slug}/commercial/${action.record.id}`} key={`${action.record.id}-${action.reason}-${index}`} style={{ color: 'inherit', textDecoration: 'none' }}>
                 <div><strong>{action.priority}: {action.reason}</strong><div className="small">{action.record.supplier_name} · {action.record.product_service || 'No product/service'}</div></div>
                 <div className="small" style={{ textAlign: 'right' }}>{action.nextAction}<br />Owner: {action.record.contract_owner_email || 'unassigned'}<br />Open record →</div>
@@ -232,7 +253,7 @@ export default function OrganisationWorkspacePage() {
             ))}
           </div>
         )}
-        {actions.length > 10 && <p className="small" style={{ marginTop: 14 }}>{actions.length - 10} additional actions are available through the register filters.</p>}
+        {actions.length > 10 && <button className="button-secondary" onClick={() => setShowAllActions((current) => !current)} style={{ marginTop: 14 }} type="button">{showAllActions ? 'Show first 10' : `Show all ${actions.length} actions`}</button>}
       </section>
 
       <section className="empty">
@@ -275,6 +296,7 @@ export default function OrganisationWorkspacePage() {
           <select aria-label="Filter commercial register" onChange={(event) => setFilter(event.target.value as RegisterFilter)} style={{ minHeight: 44, padding: '0 14px' }} value={filter}>
             <option value="all">All active records</option>
             <option value="ending_100">Within 100-day window</option>
+            <option value="expired">Expired contracts</option>
             <option value="missing_owner">Missing accountable owner</option>
             <option value="missing_sme">Missing SME email</option>
             <option value="missing_end_date">Missing end date</option>
