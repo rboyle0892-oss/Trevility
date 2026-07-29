@@ -103,7 +103,12 @@ export default function OrganisationWorkspacePage() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Import failed.');
-      setMessage(`${data.imported} commercial records imported. ${data.readinessCreated || 0} readiness request(s) created for contracts already within 100 days of end date.`);
+      const importedRecords = (data.records ?? []) as CommercialRecord[];
+      if (importedRecords.length === 1) {
+        window.location.href = `/organisations/${params.slug}/commercial/${importedRecords[0].id}`;
+        return;
+      }
+      setMessage(`${data.imported} commercial records imported. ${data.readinessCreated || 0} readiness request(s) created. Review the imported records below.`);
       await loadRecords(membership.organisation_id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Import failed.');
@@ -134,7 +139,7 @@ export default function OrganisationWorkspacePage() {
         <div className="card">
           <div className="kicker">1 · Prepare</div>
           <h2>Download the CSV template</h2>
-          <p>Use the template to keep column names and date formats consistent. It contains one example row that can be replaced or deleted.</p>
+          <p>Use the blank template to keep column names and date formats consistent.</p>
           <a className="button-secondary" download="trevecta-commercial-import-template.csv" href="/commercial-import-template.csv">Download CSV template</a>
           <p className="small" style={{ marginTop: 16 }}>Required: <code>supplier_name</code>. For readiness requests also include <code>end_date</code>, <code>sme_name</code> and <code>sme_email</code>. Dates must use YYYY-MM-DD.</p>
         </div>
@@ -158,10 +163,10 @@ export default function OrganisationWorkspacePage() {
         {records.length === 0 ? <p>No commercial records imported yet.</p> : (
           <div className="organisation-list">
             {records.slice(0, 20).map((record) => (
-              <div className="organisation-row" key={record.id}>
+              <a className="organisation-row" href={`/organisations/${params.slug}/commercial/${record.id}`} key={record.id} style={{ color: 'inherit', textDecoration: 'none' }}>
                 <div><strong>{record.supplier_name}</strong><div className="small">{record.product_service || 'No product/service'} · SME: {record.sme_email || 'missing'}</div></div>
-                <div className="small" style={{ textAlign: 'right' }}>{record.end_date || 'No end date'}<br />{record.annual_value == null ? '' : `${record.currency} ${Number(record.annual_value).toLocaleString()}`}</div>
-              </div>
+                <div className="small" style={{ textAlign: 'right' }}>{record.end_date || 'No end date'}<br />{record.annual_value == null ? '' : `${record.currency} ${Number(record.annual_value).toLocaleString()}`}<br />Open record →</div>
+              </a>
             ))}
           </div>
         )}
