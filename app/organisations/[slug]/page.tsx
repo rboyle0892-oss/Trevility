@@ -26,24 +26,16 @@ type CommercialRecord = {
   created_at: string;
 };
 
-type ParsedRow = Record<string, string>;
+type ImportRow = Record<string, string>;
+type PendingImport = { fileName: string; rows: ImportRow[] };
 type RegisterFilter = 'all' | 'ending_100' | 'expired' | 'missing_owner' | 'missing_sme' | 'missing_end_date';
 type ActionItem = { record: CommercialRecord; priority: 'High' | 'Medium'; reason: string; nextAction: string };
-type DatasetType = 'commercial_records' | 'budget_lines' | 'po_info' | 'readiness_requests' | 'unknown';
-type ImportPreview = {
-  fileName: string;
-  dataset: DatasetType;
-  datasetLabel: string;
-  headers: string[];
-  rows: ParsedRow[];
-  warnings: string[];
-};
 
 const requiredHeaders = ['supplier_name'];
 const supportedHeaders = ['external_id','supplier_name','product_service','contract_owner_name','contract_owner_email','sme_name','sme_email','start_date','end_date','annual_value','currency','status'];
 const pageSizes = [25, 50, 100];
 
-function parseCsv(text: string) {
+function parseCsv(text: string): ImportRow[] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = '';
@@ -70,48 +62,13 @@ function parseCsv(text: string) {
   if (blankHeaderIndex !== -1) throw new Error(`Column ${blankHeaderIndex + 1} has no header.`);
   const duplicateHeaders = headers.filter((header, index) => headers.indexOf(header) !== index);
   if (duplicateHeaders.length) throw new Error(`Duplicate columns are not allowed: ${[...new Set(duplicateHeaders)].join(', ')}`);
-  const malformedRowIndex = rows.slice(1).findIndex((values) => values.length !== headers.length);
-  if (malformedRowIndex !== -1) throw new Error(`Row ${malformedRowIndex + 2} does not have the same number of columns as the header.`);
-
-  return {
-    headers,
-    rows: rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? '']))),
-  };
-}
-
-function detectDataset(headers: string[]): Pick<ImportPreview, 'dataset' | 'datasetLabel'> {
-  const normalized = new Set(headers.map((header) => header.replace(/[^a-z0-9]/g, '')));
-  const has = (...values: string[]) => values.some((value) => normalized.has(value.replace(/[^a-z0-9]/g, '')));
-
-  if (has('supplier_name') || (has('supplier', 'vendor') && has('end_date', 'contract_end_date'))) {
-    return { dataset: 'commercial_records', datasetLabel: 'Commercial records' };
-  }
-  if (has('budgetcode', 'budget_code') && has('fy27_po_budget_value', 'budget_value', 'annual_value')) {
-    return { dataset: 'budget_lines', datasetLabel: 'Budget Lines' };
-  }
-  if (has('po_number') && has('order_date', 'payee_name', 'total_cost')) {
-    return { dataset: 'po_info', datasetLabel: 'PO Info' };
-  }
-  if (has('budgetcode', 'budget_code') && has('requeststatus', 'request_status', 'renewal_intent')) {
-    return { dataset: 'readiness_requests', datasetLabel: 'Readiness Requests' };
-  }
-  return { dataset: 'unknown', datasetLabel: 'Unrecognised dataset' };
-}
-
-function validateCommercialPreview(headers: string[], rows: ParsedRow[]) {
   const missing = requiredHeaders.filter((header) => !headers.includes(header));
   if (missing.length) throw new Error(`Missing required column: ${missing.join(', ')}`);
   const unsupported = headers.filter((header) => !supportedHeaders.includes(header));
   if (unsupported.length) throw new Error(`Unsupported columns: ${unsupported.join(', ')}`);
-
-  const warnings: string[] = [];
-  const missingEndDates = rows.filter((row) => !row.end_date).length;
-  const missingOwners = rows.filter((row) => !row.contract_owner_email).length;
-  const missingSmes = rows.filter((row) => !row.sme_email).length;
-  if (missingEndDates) warnings.push(`${missingEndDates} row(s) have no end date.`);
-  if (missingOwners) warnings.push(`${missingOwners} row(s) have no accountable owner email.`);
-  if (missingSmes) warnings.push(`${missingSmes} row(s) have no SME email.`);
-  return warnings;
+  const malformedRowIndex = rows.slice(1).findIndex((values) => values.length !== headers.length);
+  if (malformedRowIndex !== -1) throw new Error(`Row ${malformedRowIndex + 2} does not have the same number of columns as the header.`);
+  return rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
 }
 
 function daysUntilEnd(record: CommercialRecord) {
@@ -156,7 +113,7 @@ export default function OrganisationWorkspacePage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<RegisterFilter>('all');
   const [showAllActions, setShowAllActions] = useState(false);
@@ -191,35 +148,33 @@ export default function OrganisationWorkspacePage() {
 
   useEffect(() => { setPage(1); }, [search, filter, pageSize]);
 
-  async function prepareImport(event: ChangeEvent<HTMLInputElement>) {
+  async function selectCsv(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file || !membership || membership.role === 'viewer') return;
-    setError(null); setMessage(null); setWarning(null); setPreview(null);
+    setError(null); setMessage(null); setWarning(null);
     try {
-      const parsed = parseCsv(await file.text());
-      const detected = detectDataset(parsed.headers);
-      const warnings = detected.dataset === 'commercial_records'
-        ? validateCommercialPreview(parsed.headers, parsed.rows)
-        : [];
-      setPreview({ fileName: file.name, headers: parsed.headers, rows: parsed.rows, warnings, ...detected });
+      const rows = parseCsv(await file.text());
+      if (rows.length > 500) throw new Error('This MVP import supports up to 500 rows at a time. Split the file before continuing.');
+      setPendingImport({ fileName: file.name, rows });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to preview import.');
+      setPendingImport(null);
+      setError(caught instanceof Error ? caught.message : 'Unable to review this file.');
     }
   }
 
-  async function commitImport() {
-    if (!preview || !membership || preview.dataset !== 'commercial_records') return;
+  async function confirmImport() {
+    if (!pendingImport || !membership || membership.role === 'viewer') return;
     setBusy(true); setError(null); setMessage(null); setWarning(null);
     try {
       const response = await fetch('/api/commercial-records', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ organisationId: membership.organisation_id, fileName: preview.fileName, records: preview.rows }),
+        body: JSON.stringify({ organisationId: membership.organisation_id, fileName: pendingImport.fileName, records: pendingImport.rows }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Import failed.');
       await loadRecords(membership.organisation_id);
-      setFilter('all'); setSearch(''); setShowAllActions(false); setPage(1); setPreview(null);
+      setFilter('all'); setSearch(''); setShowAllActions(false); setPage(1); setPendingImport(null);
       if (data.readinessWarning) setWarning(data.readinessWarning);
       else setMessage(`${data.imported} commercial records imported. ${data.readinessCreated ?? 0} readiness request(s) created.`);
       const importedRecords = (data.records ?? []) as CommercialRecord[];
@@ -260,6 +215,10 @@ export default function OrganisationWorkspacePage() {
   const safePage = Math.min(page, pageCount);
   const pageStart = (safePage - 1) * pageSize;
   const pagedRecords = visibleRecords.slice(pageStart, pageStart + pageSize);
+  const previewRows = pendingImport?.rows.slice(0, 5) ?? [];
+  const previewMissingEnd = pendingImport?.rows.filter((row) => !row.end_date).length ?? 0;
+  const previewMissingOwner = pendingImport?.rows.filter((row) => !row.contract_owner_email).length ?? 0;
+  const previewMissingSme = pendingImport?.rows.filter((row) => !row.sme_email).length ?? 0;
 
   if (loading) return <main className="shell"><div className="card">Opening secure workspace…</div></main>;
   if (error && !membership?.organisations) return <main className="shell"><div className="card"><h2>Workspace unavailable</h2><p>{error}</p><a className="button-secondary" href="/">Back to organisations</a></div></main>;
@@ -271,40 +230,17 @@ export default function OrganisationWorkspacePage() {
     <main className="shell dashboard">
       <div className="topbar"><div className="brand"><span className="brand-mark">T</span><div><div>{organisation.name}</div><div className="small">Trevecta Control · {membership.role}</div></div></div><a className="button-secondary" href="/">Switch organisation</a></div>
       <section><div className="kicker">BAU commercial control</div><h1 style={{ fontSize: 'clamp(42px, 6vw, 68px)', marginBottom: 10 }}>{organisation.name}</h1><p className="lead">See what is due, what is missing, who owns it and what should happen next.</p></section>
-
       <section className="grid">
         <button className="card metric" onClick={() => setFilter('all')} type="button"><span className="small">Active commercial records</span><strong>{records.length}</strong><span className="small">Open register →</span></button>
         <div className="card metric"><span className="small">Annual commercial exposure</span>{exposureByCurrency.length === 0 ? <strong style={{ fontSize: 30 }}>No values</strong> : exposureByCurrency.map(([currency, value]) => <strong key={currency} style={{ fontSize: exposureByCurrency.length === 1 ? 30 : 23 }}>{formatMoney(value, currency)}</strong>)}<span className="small">Source currencies shown separately · no FX conversion</span></div>
         <button className="card metric" onClick={() => setFilter('ending_100')} type="button"><span className="small">Within 100-day window</span><strong>{endingWithin100Days}</strong><span className="small">Review readiness →</span></button>
         <button className="card metric" onClick={() => setFilter('missing_owner')} type="button"><span className="small">Missing accountable owner</span><strong>{missingOwner}</strong><span className="small">Assign ownership →</span></button>
       </section>
-
-      <section className="card" style={{ marginTop: 20 }}>
-        <div className="kicker">Today&apos;s work</div><h2>BAU action queue</h2><p>Derived from the active commercial register&apos;s expiry, ownership and SME fields.</p>
-        {records.length === 0 ? <div className="message" role="status">No commercial records are loaded, so Trevecta cannot assess current BAU risk.</div> : actions.length === 0 ? <div className="message success" role="status">No immediate data-quality or renewal actions were derived from the active register.</div> : <div className="organisation-list">{displayedActions.map((action, index) => <a className="organisation-row" href={`/organisations/${params.slug}/commercial/${action.record.id}`} key={`${action.record.id}-${action.reason}-${index}`}><div><strong>{action.priority}: {action.reason}</strong><div className="small">{action.record.supplier_name} · {action.record.product_service || 'No product/service'}</div></div><div className="small" style={{ textAlign: 'right' }}>{action.nextAction}<br />Owner: {action.record.contract_owner_email || 'unassigned'}<br />Open record →</div></a>)}</div>}
-        {actions.length > 10 && <button className="button-secondary" onClick={() => setShowAllActions((current) => !current)} style={{ marginTop: 14 }} type="button">{showAllActions ? 'Show first 10' : `Show all ${actions.length} actions`}</button>}
-      </section>
-
+      <section className="card" style={{ marginTop: 20 }}><div className="kicker">Today&apos;s work</div><h2>BAU action queue</h2><p>Derived from the active commercial register&apos;s expiry, ownership and SME fields.</p>{records.length === 0 ? <div className="message" role="status">No commercial records are loaded, so Trevecta cannot assess current BAU risk.</div> : actions.length === 0 ? <div className="message success" role="status">No immediate data-quality or renewal actions were derived from the active register.</div> : <div className="organisation-list">{displayedActions.map((action, index) => <a className="organisation-row" href={`/organisations/${params.slug}/commercial/${action.record.id}`} key={`${action.record.id}-${action.reason}-${index}`}><div><strong>{action.priority}: {action.reason}</strong><div className="small">{action.record.supplier_name} · {action.record.product_service || 'No product/service'}</div></div><div className="small" style={{ textAlign: 'right' }}>{action.nextAction}<br />Owner: {action.record.contract_owner_email || 'unassigned'}<br />Open record →</div></a>)}</div>}{actions.length > 10 && <button className="button-secondary" onClick={() => setShowAllActions((current) => !current)} style={{ marginTop: 14 }} type="button">{showAllActions ? 'Show first 10' : `Show all ${actions.length} actions`}</button>}</section>
       <section className="empty">
         <div className="card"><div className="kicker">1 · Prepare</div><h2>Download the CSV template</h2><p>Use the blank template to keep contract, owner, SME, value and date fields consistent.</p><a className="button-secondary" download="trevecta-commercial-import-template.csv" href="/commercial-import-template.csv">Download CSV template</a></div>
-        <div className="card">
-          {canManageCommercialData ? <>
-            <div className="kicker">2 · Preview and import</div><h2>Upload source data</h2><p>Select a CSV to inspect its dataset, headers and row count before anything is saved.</p>
-            <label className="button-primary" style={{ display: 'inline-block', cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'Importing…' : preview ? 'Choose another CSV' : 'Choose CSV file'}<input accept=".csv,text/csv" disabled={busy} onChange={prepareImport} style={{ display: 'none' }} type="file" /></label>
-            {preview && <div className="message" style={{ marginTop: 14 }}>
-              <strong>{preview.datasetLabel}</strong><br />
-              {preview.fileName} · {preview.rows.length} data row{preview.rows.length === 1 ? '' : 's'} · {preview.headers.length} columns
-              <div className="small" style={{ marginTop: 8 }}>Headers: {preview.headers.join(', ')}</div>
-              {preview.warnings.length > 0 && <ul>{preview.warnings.map((item) => <li key={item}>{item}</li>)}</ul>}
-              {preview.dataset === 'commercial_records' ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}><button className="button-primary" disabled={busy} onClick={commitImport} type="button">{busy ? 'Importing…' : `Import ${preview.rows.length} row${preview.rows.length === 1 ? '' : 's'}`}</button><button className="button-secondary" disabled={busy} onClick={() => setPreview(null)} type="button">Cancel</button></div> : <><div className="message error" role="alert" style={{ marginTop: 12 }}>Dataset recognised, but this branch does not yet have a production-safe database pipeline for {preview.datasetLabel}. Nothing has been saved.</div><button className="button-secondary" onClick={() => setPreview(null)} type="button">Cancel preview</button></>}
-            </div>}
-            {message && <div className="message success" role="status">{message}</div>}
-            {warning && <div className="message error" role="alert"><strong>Records imported, readiness reconciliation failed.</strong><br />{warning}<br />Do not upload the file again.</div>}
-            {error && <div className="message error" role="alert">{error}</div>}
-          </> : <><div className="kicker">Read-only access</div><h2>Commercial imports are restricted</h2><p>You can review the register and BAU queue, but an owner, admin or member is required to import or change data.</p></>}
-        </div>
+        <div className="card">{canManageCommercialData ? <><div className="kicker">2 · Review and import</div><h2>Upload commercial data</h2><p>Select a CSV to validate and preview it. Nothing is saved until you confirm the import.</p><label className="button-primary" style={{ display: 'inline-block', cursor: busy ? 'wait' : 'pointer' }}>{pendingImport ? 'Choose a different CSV' : 'Choose CSV file'}<input accept=".csv,text/csv" disabled={busy} onChange={selectCsv} style={{ display: 'none' }} type="file" /></label>{pendingImport && <div className="message" role="status" style={{ marginTop: 16 }}><strong>{pendingImport.fileName}</strong><br />{pendingImport.rows.length} row{pendingImport.rows.length === 1 ? '' : 's'} ready for review · {previewMissingEnd} missing end date · {previewMissingOwner} missing owner · {previewMissingSme} missing SME<div style={{ overflowX: 'auto', marginTop: 12 }}><table style={{ width: '100%', borderCollapse: 'collapse' }}><thead><tr><th style={{ textAlign: 'left' }}>Supplier</th><th style={{ textAlign: 'left' }}>Service</th><th style={{ textAlign: 'left' }}>End date</th><th style={{ textAlign: 'left' }}>Owner</th></tr></thead><tbody>{previewRows.map((row, index) => <tr key={`${row.external_id || row.supplier_name}-${index}`}><td>{row.supplier_name || 'Missing'}</td><td>{row.product_service || 'Not provided'}</td><td>{row.end_date || 'Missing'}</td><td>{row.contract_owner_email || 'Missing'}</td></tr>)}</tbody></table></div>{pendingImport.rows.length > previewRows.length && <div className="small" style={{ marginTop: 8 }}>Previewing the first {previewRows.length} rows.</div>}<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}><button className="button-primary" disabled={busy} onClick={confirmImport} type="button">{busy ? 'Importing…' : `Confirm import of ${pendingImport.rows.length} rows`}</button><button className="button-secondary" disabled={busy} onClick={() => setPendingImport(null)} type="button">Cancel</button></div></div>}{message && <div className="message success" role="status">{message}</div>}{warning && <div className="message error" role="alert"><strong>Records imported, readiness reconciliation failed.</strong><br />{warning}<br />Do not upload the file again.</div>}{error && <div className="message error" role="alert">{error}</div>}</> : <><div className="kicker">Read-only access</div><h2>Commercial imports are restricted</h2><p>You can review the register and BAU queue, but an owner, admin or member is required to import or change data.</p></>}</div>
       </section>
-
       <section className="card" style={{ marginTop: 20 }}>
         <div className="kicker">Source of truth</div><h2>Commercial register</h2>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
