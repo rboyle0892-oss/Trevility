@@ -25,16 +25,27 @@ type ImportPayload = {
   raw_data: Record<string, unknown>;
 };
 
-async function authedFetch(path: string, init: RequestInit = {}) {
+async function getAuth() {
   const store = await cookies();
   const token = store.get(ACCESS_COOKIE)?.value;
   if (!token) return null;
+  const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (!userResponse.ok) return null;
+  const user = await userResponse.json();
+  return { token, userId: user.id as string };
+}
 
+async function authedFetch(path: string, init: RequestInit = {}) {
+  const auth = await getAuth();
+  if (!auth) return null;
   return fetch(`${SUPABASE_URL}${path}`, {
     ...init,
     headers: {
       apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${auth.token}`,
       'Content-Type': 'application/json',
       Prefer: 'return=representation',
       ...(init.headers ?? {}),
@@ -46,12 +57,47 @@ async function authedFetch(path: string, init: RequestInit = {}) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const organisationId = searchParams.get('organisationId');
+  const includeArchived = searchParams.get('includeArchived') === 'true';
   if (!organisationId) return NextResponse.json({ error: 'Organisation is required.' }, { status: 400 });
 
-  const response = await authedFetch(`/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}&select=*&order=end_date.asc.nullslast,created_at.desc`);
+  const archiveFilter = includeArchived ? '' : '&archived_at=is.null';
+  const response = await authedFetch(`/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}${archiveFilter}&select=*&order=end_date.asc.nullslast,created_at.desc`);
   if (!response) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
   const data = await response.json();
   return NextResponse.json(response.ok ? { records: data } : { error: data.message ?? 'Unable to load records.' }, { status: response.status });
+}
+
+export async function PATCH(request: Request) {
+  const auth = await getAuth();
+  if (!auth) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
+
+  const body = await request.json();
+  const id = body.id as string | undefined;
+  const organisationId = body.organisationId as string | undefined;
+  const action = body.action as 'archive' | 'restore' | undefined;
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (!id || !organisationId || !action) return NextResponse.json({ error: 'Record, organisation and action are required.' }, { status: 400 });
+  if (action === 'archive' && !reason) return NextResponse.json({ error: 'An archive reason is required.' }, { status: 400 });
+
+  const payload = action === 'archive'
+    ? { archived_at: new Date().toISOString(), archived_by: auth.userId, archive_reason: reason }
+    : { archived_at: null, archived_by: null, archive_reason: null };
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/commercial_records?id=eq.${encodeURIComponent(id)}&organisation_id=eq.${encodeURIComponent(organisationId)}`, {
+    method: 'PATCH',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${auth.token}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+  const data = await response.json();
+  if (!response.ok) return NextResponse.json({ error: data.message ?? `Unable to ${action} record.` }, { status: response.status });
+  if (!Array.isArray(data) || data.length === 0) return NextResponse.json({ error: 'Record not found or access is not permitted.' }, { status: 404 });
+  return NextResponse.json({ record: data[0] });
 }
 
 export async function POST(request: Request) {
@@ -59,12 +105,8 @@ export async function POST(request: Request) {
   const organisationId = body.organisationId as string | undefined;
   const records = Array.isArray(body.records) ? body.records : [];
 
-  if (!organisationId || records.length === 0) {
-    return NextResponse.json({ error: 'Organisation and at least one record are required.' }, { status: 400 });
-  }
-  if (records.length > 500) {
-    return NextResponse.json({ error: 'This MVP import supports up to 500 rows at a time.' }, { status: 400 });
-  }
+  if (!organisationId || records.length === 0) return NextResponse.json({ error: 'Organisation and at least one record are required.' }, { status: 400 });
+  if (records.length > 500) return NextResponse.json({ error: 'This MVP import supports up to 500 rows at a time.' }, { status: 400 });
 
   const payload: ImportPayload[] = records.map((record: Record<string, unknown>, index: number) => ({
     organisation_id: organisationId,
@@ -89,19 +131,12 @@ export async function POST(request: Request) {
   const invalid = payload.find((record: ImportPayload) => !record.supplier_name || (record.end_date && Number.isNaN(Date.parse(String(record.end_date)))) || (record.sme_email && !String(record.sme_email).includes('@')) || (record.annual_value != null && !Number.isFinite(record.annual_value)));
   if (invalid) return NextResponse.json({ error: 'One or more rows contain an invalid supplier, date, SME email or annual value.' }, { status: 400 });
 
-  const response = await authedFetch('/rest/v1/commercial_records', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  const response = await authedFetch('/rest/v1/commercial_records', { method: 'POST', body: JSON.stringify(payload) });
   if (!response) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
   const data = await response.json();
   if (!response.ok) return NextResponse.json({ error: data.message ?? 'Import failed.' }, { status: response.status });
 
-  const readinessResponse = await authedFetch('/rest/v1/rpc/create_readiness_requests_for_due_records', {
-    method: 'POST',
-    body: JSON.stringify({ target_organisation_id: organisationId }),
-  });
+  const readinessResponse = await authedFetch('/rest/v1/rpc/create_readiness_requests_for_due_records', { method: 'POST', body: JSON.stringify({ target_organisation_id: organisationId }) });
   const readinessCreated = readinessResponse?.ok ? await readinessResponse.json() : 0;
-
   return NextResponse.json({ imported: data.length, readinessCreated, records: data });
 }
