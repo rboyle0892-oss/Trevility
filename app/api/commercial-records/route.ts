@@ -111,7 +111,9 @@ export async function GET(request: Request) {
   if (recordId) {
     if (!Array.isArray(data) || data.length === 0) return NextResponse.json({ error: 'Commercial record not found or access is not permitted.' }, { status: 404 });
     const readinessResponse = await authedFetch(`/rest/v1/readiness_requests?organisation_id=eq.${encodeURIComponent(organisationId)}&commercial_record_id=eq.${encodeURIComponent(recordId)}&select=*&order=created_at.desc`);
-    const readinessData = readinessResponse?.ok ? await readinessResponse.json() : [];
+    if (!readinessResponse) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
+    const readinessData = await readinessResponse.json();
+    if (!readinessResponse.ok) return NextResponse.json({ error: readinessData.message ?? 'The commercial record loaded, but its readiness history could not be retrieved. Retry before making a readiness decision.' }, { status: readinessResponse.status });
     return NextResponse.json({ record: data[0], readinessRequests: Array.isArray(readinessData) ? readinessData : [] });
   }
   return NextResponse.json({ records: data });
