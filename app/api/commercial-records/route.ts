@@ -148,6 +148,26 @@ export async function PATCH(request: Request) {
     if (!reason) return NextResponse.json({ error: 'An archive reason is required.' }, { status: 400 });
     payload = { archived_at: new Date().toISOString(), archived_by: auth.userId, archive_reason: reason };
   } else if (action === 'restore') {
+    const currentResponse = await fetch(`${SUPABASE_URL}/rest/v1/commercial_records?id=eq.${encodeURIComponent(id)}&organisation_id=eq.${encodeURIComponent(organisationId)}&select=external_id`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${auth.token}` },
+      cache: 'no-store',
+    });
+    const currentData = await currentResponse.json();
+    if (!currentResponse.ok) return NextResponse.json({ error: currentData.message ?? 'Unable to validate this archived record before restore.' }, { status: currentResponse.status });
+    if (!Array.isArray(currentData) || currentData.length === 0) return NextResponse.json({ error: 'Record not found or access is not permitted.' }, { status: 404 });
+
+    const restoreExternalId = normaliseExternalId(currentData[0].external_id);
+    if (restoreExternalId) {
+      const activeResponse = await fetch(`${SUPABASE_URL}/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}&archived_at=is.null&id=neq.${encodeURIComponent(id)}&external_id=not.is.null&select=external_id`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${auth.token}` },
+        cache: 'no-store',
+      });
+      const activeData = await activeResponse.json();
+      if (!activeResponse.ok) return NextResponse.json({ error: activeData.message ?? 'Unable to check whether this record can be restored.' }, { status: activeResponse.status });
+      const duplicateExists = (Array.isArray(activeData) ? activeData : []).some((record: { external_id?: unknown }) => normaliseExternalId(record.external_id) === restoreExternalId);
+      if (duplicateExists) return NextResponse.json({ error: 'This archived record cannot be restored because another active record now uses the same reference. Edit one of the records first.' }, { status: 409 });
+    }
+
     payload = { archived_at: null, archived_by: null, archive_reason: null };
   } else {
     const fields = (body.fields ?? {}) as Record<string, unknown>;
@@ -163,13 +183,14 @@ export async function PATCH(request: Request) {
 
     const externalId = normaliseExternalId(update.external_id);
     if (externalId) {
-      const duplicateResponse = await fetch(`${SUPABASE_URL}/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}&archived_at=is.null&id=neq.${encodeURIComponent(id)}&external_id=ilike.${encodeURIComponent(String(update.external_id))}&select=id`, {
+      const duplicateResponse = await fetch(`${SUPABASE_URL}/rest/v1/commercial_records?organisation_id=eq.${encodeURIComponent(organisationId)}&archived_at=is.null&id=neq.${encodeURIComponent(id)}&external_id=not.is.null&select=external_id`, {
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${auth.token}` },
         cache: 'no-store',
       });
       const duplicateData = await duplicateResponse.json();
       if (!duplicateResponse.ok) return NextResponse.json({ error: duplicateData.message ?? 'Unable to check the record reference.' }, { status: duplicateResponse.status });
-      if (Array.isArray(duplicateData) && duplicateData.length) return NextResponse.json({ error: 'Another active record already uses this reference.' }, { status: 409 });
+      const duplicateExists = (Array.isArray(duplicateData) ? duplicateData : []).some((record: { external_id?: unknown }) => normaliseExternalId(record.external_id) === externalId);
+      if (duplicateExists) return NextResponse.json({ error: 'Another active record already uses this reference.' }, { status: 409 });
     }
     payload = update;
   }
