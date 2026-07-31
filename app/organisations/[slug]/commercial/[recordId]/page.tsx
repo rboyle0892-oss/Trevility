@@ -61,12 +61,45 @@ type EditFields = {
   status: string;
 };
 
+const responseLabels: Record<string, string> = {
+  requested_outcome: 'Requested outcome',
+  business_requirement: 'Business requirement',
+  business_criticality: 'Business criticality',
+  impact_if_not_renewed: 'Impact if not progressed',
+  current_scope: 'Current scope',
+  future_scope: 'Future scope',
+  current_annual_value: 'Current annual value',
+  currency: 'Currency',
+  latest_quote_received: 'Latest quote received',
+  commercials_required: 'Commercials required',
+  budget_confirmed: 'Budget confirmed',
+  purchase_order_status: 'Purchase order status',
+  procurement_support_required: 'Procurement support required',
+  legal_or_security_dependencies: 'Legal, security or technical dependencies',
+  decision_owner: 'Decision owner',
+  decision_required_by: 'Decision required by',
+  recommended_next_action: 'Recommended next action',
+  additional_notes: 'Additional notes',
+};
+
 function formatDate(value: string | null) {
   return value ? new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB') : 'Not provided';
 }
 
 function formatDateTime(value: string | null) {
   return value ? new Date(value).toLocaleString('en-GB') : 'Not recorded';
+}
+
+function formatResponseValue(value: unknown) {
+  if (value == null || value === '') return 'Not answered';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'Not answered';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function responseEntries(request: ReadinessRequest) {
+  return Object.entries(request.response ?? {}).filter(([, value]) => value != null && value !== '');
 }
 
 function fieldsFromRecord(record: CommercialRecord): EditFields {
@@ -99,22 +132,22 @@ export default function CommercialRecordPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   async function loadRecord(selected: Organisation) {
-    const recordResponse = await fetch(`/api/commercial-records?organisationId=${encodeURIComponent(selected.organisation_id)}&recordId=${encodeURIComponent(params.recordId)}&includeArchived=true`, { cache: 'no-store' });
-    const recordData = await recordResponse.json();
-    if (!recordResponse.ok) throw new Error(recordData.error ?? 'Unable to load commercial record.');
-    const nextRecord = recordData.record as CommercialRecord;
+    const response = await fetch(`/api/commercial-records?organisationId=${encodeURIComponent(selected.organisation_id)}&recordId=${encodeURIComponent(params.recordId)}&includeArchived=true`, { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? 'Unable to load commercial record.');
+    const nextRecord = data.record as CommercialRecord;
     setRecord(nextRecord);
     setFields(fieldsFromRecord(nextRecord));
-    setReadinessRequests((recordData.readinessRequests ?? []) as ReadinessRequest[]);
+    setReadinessRequests((data.readinessRequests ?? []) as ReadinessRequest[]);
   }
 
   useEffect(() => {
     async function load() {
       try {
-        const organisationResponse = await fetch('/api/organisations', { cache: 'no-store' });
-        const organisationData = await organisationResponse.json();
-        if (!organisationResponse.ok) throw new Error(organisationData.error ?? 'Unable to load organisation.');
-        const selected = (organisationData.organisations as Organisation[]).find((item) => item.organisations?.slug === params.slug);
+        const response = await fetch('/api/organisations', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? 'Unable to load organisation.');
+        const selected = (data.organisations as Organisation[]).find((item) => item.organisations?.slug === params.slug);
         if (!selected) throw new Error('Organisation not found or access is not permitted.');
         setOrganisation(selected);
         await loadRecord(selected);
@@ -145,7 +178,9 @@ export default function CommercialRecordPage() {
       setMessage('Commercial record updated. Dashboard figures and work queues will reflect the corrected values.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to save record.');
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function changeArchiveState(action: 'archive' | 'restore') {
@@ -162,17 +197,22 @@ export default function CommercialRecordPage() {
     setBusy(true); setError(null); setMessage(null);
     try {
       const response = await fetch('/api/commercial-records', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: record.id, organisationId: organisation.organisation_id, action, reason }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `Unable to ${action} record.`);
       setRecord(data.record as CommercialRecord);
       setFields(fieldsFromRecord(data.record as CommercialRecord));
-      setMessage(action === 'archive' ? 'Record archived. It is excluded from active totals and can be restored here.' : 'Record restored to the active commercial register.');
+      setMessage(action === 'archive'
+        ? 'Record archived. It is excluded from active totals and can be restored here.'
+        : 'Record restored to the active commercial register.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : `Unable to ${action} record.`);
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function retryReadiness() {
@@ -180,7 +220,8 @@ export default function CommercialRecordPage() {
     setBusy(true); setError(null); setMessage(null);
     try {
       const response = await fetch('/api/commercial-records', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ organisationId: organisation.organisation_id, action: 'retry_readiness' }),
       });
       const data = await response.json();
@@ -189,7 +230,9 @@ export default function CommercialRecordPage() {
       setMessage(`${data.readinessCreated ?? 0} new readiness request(s) created. Existing requests were not duplicated.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to retry readiness generation.');
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   const latestReadiness = readinessRequests[0] ?? null;
@@ -198,7 +241,8 @@ export default function CommercialRecordPage() {
     if (latestReadiness) return latestReadiness.status;
     if (!record.end_date) return 'Blocked: end date missing';
     if (!record.sme_email) return 'Blocked: SME contact missing';
-    const trigger = new Date(`${record.end_date}T00:00:00`); trigger.setDate(trigger.getDate() - 100);
+    const trigger = new Date(`${record.end_date}T00:00:00`);
+    trigger.setDate(trigger.getDate() - 100);
     return trigger.getTime() <= Date.now() ? 'Due: request not found' : 'Not yet in window';
   }, [latestReadiness, record]);
 
@@ -236,30 +280,139 @@ export default function CommercialRecordPage() {
       <section className="empty">
         <div className="card">
           <div className="kicker">Contract details</div><h2>Commercial information</h2>
-          <p><strong>Reference:</strong> {record.external_id || 'Not provided'}</p><p><strong>Status:</strong> {record.status || 'Not provided'}</p>
-          <p><strong>Start date:</strong> {formatDate(record.start_date)}</p><p><strong>Annual value:</strong> {record.annual_value == null ? 'Not provided' : `${record.currency} ${Number(record.annual_value).toLocaleString('en-GB')}`}</p>
+          <p><strong>Reference:</strong> {record.external_id || 'Not provided'}</p>
+          <p><strong>Source status:</strong> {record.status || 'Not provided'}</p>
+          <p><strong>Start date:</strong> {formatDate(record.start_date)}</p>
+          <p><strong>Annual value:</strong> {record.annual_value == null ? 'Not provided' : `${record.currency} ${Number(record.annual_value).toLocaleString('en-GB')}`}</p>
           <p><strong>Source evidence:</strong> {record.source_file_name || 'Not recorded'}{record.source_row_number ? ` · row ${record.source_row_number}` : ''}</p>
           <p className="small">Created {formatDateTime(record.created_at)} · Last changed {formatDateTime(record.updated_at)}</p>
         </div>
         <div className="card">
           <div className="kicker">Accountability</div><h2>Owner and SME</h2>
-          <p><strong>Contract owner:</strong> {record.contract_owner_name || 'Not provided'}</p><p><strong>Owner email:</strong> {record.contract_owner_email || 'Not provided'}</p>
-          <p><strong>SME:</strong> {record.sme_name || 'Not provided'}</p><p><strong>SME email:</strong> {record.sme_email || 'Not provided'}</p>
+          <p><strong>Contract owner:</strong> {record.contract_owner_name || 'Not provided'}</p>
+          <p><strong>Owner email:</strong> {record.contract_owner_email || 'Not provided'}</p>
+          <p><strong>SME:</strong> {record.sme_name || 'Not provided'}</p>
+          <p><strong>SME email:</strong> {record.sme_email || 'Not provided'}</p>
         </div>
       </section>
 
       <section className="card" style={{ marginTop: 20 }}>
-        <div className="kicker">Readiness lifecycle</div><h2>Requests and responses</h2>
-        {readinessRequests.length === 0 ? <div className="message" role="status">No readiness request is linked to this record. {readinessSummary.startsWith('Due') ? 'Retry generation to recover the missing request.' : 'A request will be created when the record enters the 100-day window and has an SME email.'}</div> : <div className="organisation-list">{readinessRequests.map((request) => <div className="organisation-row" key={request.id}><div><strong style={{ textTransform: 'capitalize' }}>{request.status}</strong><div className="small">{request.recipient_name || 'Unnamed SME'} · {request.recipient_email}</div></div><div className="small" style={{ textAlign: 'right' }}>Trigger: {formatDate(request.trigger_date)}<br />Due: {formatDate(request.due_date)}<br />Submitted: {formatDateTime(request.submitted_at)}</div></div>)}</div>}
-        {canManage && !record.archived_at && <button className="button-secondary" disabled={busy} onClick={retryReadiness} style={{ marginTop: 14 }} type="button">{busy ? 'Working…' : 'Retry readiness generation'}</button>}
+        <div className="kicker">SME commercial readiness</div>
+        <h2>Requests and submitted responses</h2>
+        <p>Use the SME response to understand the requirement, obtain commercials and move the item to a decision.</p>
+
+        {readinessRequests.length === 0 ? (
+          <div className="message" role="status">
+            No SME request is linked to this record. {readinessSummary.startsWith('Due') ? 'Retry generation to recover the missing request.' : 'A request will be created when the record enters the 100-day window and has an SME email.'}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 16 }}>
+            {readinessRequests.map((request) => {
+              const entries = responseEntries(request);
+              const outcome = formatResponseValue(request.response?.requested_outcome);
+              const nextAction = formatResponseValue(request.response?.recommended_next_action);
+              return (
+                <article className="card" key={request.id} style={{ margin: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+                    <div>
+                      <div className="kicker">SME request</div>
+                      <h3 style={{ marginBottom: 6, textTransform: 'capitalize' }}>{request.status}</h3>
+                      <div className="small">{request.recipient_name || 'Unnamed SME'} · {request.recipient_email}</div>
+                    </div>
+                    <div className="small" style={{ textAlign: 'right' }}>
+                      Trigger: {formatDate(request.trigger_date)}<br />
+                      Due: {formatDate(request.due_date)}<br />
+                      Submitted: {formatDateTime(request.submitted_at)}
+                    </div>
+                  </div>
+
+                  {request.status === 'submitted' ? (
+                    entries.length === 0 ? (
+                      <div className="message error" role="alert" style={{ marginTop: 14 }}>
+                        This request is marked submitted but contains no response answers. Review the source before treating it as decision-ready.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="message success" role="status" style={{ marginTop: 14 }}>
+                          <strong>SME response received</strong><br />
+                          Outcome: {outcome}<br />
+                          Next action: {nextAction}
+                        </div>
+                        <div className="grid" style={{ marginTop: 14, alignItems: 'start' }}>
+                          {entries.map(([key, value]) => (
+                            <div key={key} style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                              <div className="small">{responseLabels[key] ?? key.replaceAll('_', ' ')}</div>
+                              <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{formatResponseValue(value)}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
+                          <button className="button-primary" disabled type="button">Mark decision-ready</button>
+                          <button className="button-secondary" disabled type="button">Request clarification</button>
+                          <button className="button-secondary" disabled type="button">Assign commercial engagement</button>
+                        </div>
+                        <p className="small" style={{ marginTop: 8 }}>Decision actions are shown for workflow clarity and will be enabled when the audited action lifecycle is connected.</p>
+                      </>
+                    )
+                  ) : (
+                    <div className="message" role="status" style={{ marginTop: 14 }}>
+                      No submitted SME response yet. The request is currently <strong>{request.status}</strong>.
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+
+        {canManage && !record.archived_at && (
+          <button className="button-secondary" disabled={busy} onClick={retryReadiness} style={{ marginTop: 14 }} type="button">
+            {busy ? 'Working…' : 'Retry readiness generation'}
+          </button>
+        )}
       </section>
 
       <section className="card" style={{ marginTop: 20 }}>
         <div className="kicker">Record correction</div>
-        {!canManage ? <><h2>Read-only record</h2><p>You can review this record, but an owner, admin or member is required to change it.</p></> : !editing ? <><h2>Edit or correct this record</h2><p>Correct imported values here instead of re-uploading or creating a duplicate record.</p><button className="button-primary" disabled={busy || Boolean(record.archived_at)} onClick={() => setEditing(true)} type="button">Edit record</button></> : <form onSubmit={saveRecord}><h2>Edit commercial record</h2><div className="grid" style={{ alignItems: 'start' }}>{Object.entries(fields).map(([key, value]) => <label key={key} style={{ display: 'grid', gap: 6 }}><span className="small">{key.replaceAll('_', ' ')}</span><input onChange={(event) => setFields((current) => current ? { ...current, [key]: event.target.value } : current)} required={key === 'supplier_name'} style={{ minHeight: 44, padding: '0 12px' }} type={key.includes('date') ? 'date' : key.includes('email') ? 'email' : key === 'annual_value' ? 'number' : 'text'} value={value} /></label>)}</div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}><button className="button-primary" disabled={busy} type="submit">{busy ? 'Saving…' : 'Save changes'}</button><button className="button-secondary" disabled={busy} onClick={() => { setFields(fieldsFromRecord(record)); setEditing(false); setError(null); }} type="button">Cancel</button></div></form>}
+        {!canManage ? (
+          <><h2>Read-only record</h2><p>You can review this record, but an owner, admin or member is required to change it.</p></>
+        ) : !editing ? (
+          <><h2>Edit or correct this record</h2><p>Correct imported values here instead of re-uploading or creating a duplicate record.</p><button className="button-primary" disabled={busy || Boolean(record.archived_at)} onClick={() => setEditing(true)} type="button">Edit record</button></>
+        ) : (
+          <form onSubmit={saveRecord}>
+            <h2>Edit commercial record</h2>
+            <div className="grid" style={{ alignItems: 'start' }}>
+              {Object.entries(fields).map(([key, value]) => (
+                <label key={key} style={{ display: 'grid', gap: 6 }}>
+                  <span className="small">{key === 'status' ? 'source status' : key.replaceAll('_', ' ')}</span>
+                  <input
+                    onChange={(event) => setFields((current) => current ? { ...current, [key]: event.target.value } : current)}
+                    required={key === 'supplier_name'}
+                    style={{ minHeight: 44, padding: '0 12px' }}
+                    type={key.includes('date') ? 'date' : key.includes('email') ? 'email' : key === 'annual_value' ? 'number' : 'text'}
+                    value={value}
+                  />
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
+              <button className="button-primary" disabled={busy} type="submit">{busy ? 'Saving…' : 'Save changes'}</button>
+              <button className="button-secondary" disabled={busy} onClick={() => { setFields(fieldsFromRecord(record)); setEditing(false); setError(null); }} type="button">Cancel</button>
+            </div>
+          </form>
+        )}
       </section>
 
-      {canManage && <section className="card" style={{ marginTop: 20 }}><div className="kicker">Lifecycle management</div>{record.archived_at ? <><h2>Restore this record</h2><p>Return the record to active dashboard totals and work queues.</p><button className="button-primary" disabled={busy} onClick={() => changeArchiveState('restore')} type="button">{busy ? 'Restoring…' : 'Restore record'}</button></> : <><h2>Archive this record</h2><p>Archive incorrect, duplicated or no-longer-active records without permanently deleting evidence.</p><button className="button-secondary" disabled={busy} onClick={() => changeArchiveState('archive')} type="button">{busy ? 'Archiving…' : 'Archive record'}</button></>}</section>}
+      {canManage && (
+        <section className="card" style={{ marginTop: 20 }}>
+          <div className="kicker">Lifecycle management</div>
+          {record.archived_at ? (
+            <><h2>Restore this record</h2><p>Return the record to active dashboard totals and work queues.</p><button className="button-primary" disabled={busy} onClick={() => changeArchiveState('restore')} type="button">{busy ? 'Restoring…' : 'Restore record'}</button></>
+          ) : (
+            <><h2>Archive this record</h2><p>Archive incorrect, duplicated or no-longer-active records without permanently deleting evidence.</p><button className="button-secondary" disabled={busy} onClick={() => changeArchiveState('archive')} type="button">{busy ? 'Archiving…' : 'Archive record'}</button></>
+          )}
+        </section>
+      )}
     </main>
   );
 }
